@@ -1,0 +1,42 @@
+.stat-grid-strip {
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  margin-bottom: 20px;
+}
+
+.stat-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 16px;
+
+  .stat-value {
+    font-size: 28px;
+    font-weight: 700;
+    color: rgba(0, 0, 0, 0.86);
+  }
+
+  .stat-label {
+    color: rgba(0, 0, 0, 0.55);
+    font-size: 12px;
+  }
+}
+
+.list-link {
+  cursor: pointer;
+  border-radius: 8px;
+
+  &:hover {
+    background: rgba(63, 81, 181, 0.05);
+  }
+}
+
+.two-col {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 20px;
+
+  .section-card {
+    margin-bottom: 0;
+  }
+}

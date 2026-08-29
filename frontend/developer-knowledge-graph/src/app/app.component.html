@@ -1,0 +1,99 @@
+<mat-toolbar color="primary" class="app-toolbar">
+  <mat-icon class="brand-icon" fontIcon="hub"></mat-icon>
+  <a class="brand" routerLink="/" routerLinkActive="active-link" [routerLinkActiveOptions]="{ exact: true }">
+    Knowledge<span class="brand-accent">Graph</span>
+  </a>
+
+  <nav class="nav-links">
+    <a routerLink="/developers" routerLinkActive="active-link">Developers</a>
+    <a routerLink="/projects" routerLinkActive="active-link">Projects</a>
+    <a routerLink="/technologies" routerLinkActive="active-link">Technologies</a>
+    <a routerLink="/graph" routerLinkActive="active-link">Graph Explorer</a>
+    <a routerLink="/search" routerLinkActive="active-link">Search</a>
+  </nav>
+
+  <span class="spacer"></span>
+
+  <form class="search-form" (submit)="onSearchSubmit($event)">
+    <mat-form-field appearance="outline" class="search-field">
+      <mat-label>Search people, projects, tech…</mat-label>
+      <input
+        matInput
+        type="search"
+        class="app-search-input"
+        [matAutocomplete]="auto"
+        (input)="onSearchInput($event)"
+      />
+      @if (searching) {
+        <mat-spinner matSuffix diameter="18"></mat-spinner>
+      } @else {
+        <mat-icon matSuffix fontIcon="search"></mat-icon>
+      }
+    </mat-form-field>
+
+    <mat-autocomplete #auto="matAutocomplete" (optionSelected)="onOptionSelected($event)" [displayWith]="displayFn">
+      @if (searchGroups.length === 0 && !searching) {
+        <mat-option disabled>Type to search across the graph</mat-option>
+      }
+      @for (group of searchGroups; track group.category) {
+        <mat-optgroup [label]="group.category">
+          @for (item of group.results; track item.id) {
+            <mat-option [value]="item">
+              <span>{{ item.name }}</span>
+              <span class="search-subtitle"> · {{ item.subtitle }}</span>
+            </mat-option>
+          }
+        </mat-optgroup>
+      }
+    </mat-autocomplete>
+  </form>
+
+  <button mat-icon-button [matMenuTriggerFor]="navMenu" class="mobile-menu" aria-label="Navigation">
+    <mat-icon fontIcon="menu"></mat-icon>
+  </button>
+  <mat-menu #navMenu="matMenu">
+    <a mat-menu-item routerLink="/developers">Developers</a>
+    <a mat-menu-item routerLink="/projects">Projects</a>
+    <a mat-menu-item routerLink="/technologies">Technologies</a>
+    <a mat-menu-item routerLink="/graph">Graph Explorer</a>
+    <a mat-menu-item routerLink="/search">Search</a>
+  </mat-menu>
+
+  <button
+    mat-icon-button
+    class="health-indicator"
+    [matTooltip]="
+      databaseHealthy === null
+        ? 'Checking database connection…'
+        : databaseHealthy
+          ? 'SQL Server connected'
+          : databaseMessage ?? 'Database unreachable'
+    "
+    matTooltipPosition="below"
+    aria-label="Database health"
+  >
+    @if (databaseHealthy === null) {
+      <mat-icon fontIcon="cloud_sync"></mat-icon>
+    } @else if (databaseHealthy) {
+      <mat-icon class="health-ok" fontIcon="cloud_done"></mat-icon>
+    } @else {
+      <mat-icon class="health-bad" fontIcon="cloud_off"></mat-icon>
+    }
+  </button>
+</mat-toolbar>
+
+@if (databaseHealthy === false) {
+  <div class="db-banner">
+    <mat-icon fontIcon="warning"></mat-icon>
+    <span>Unable to connect to the database. Please try again.</span>
+    <a (click)="refreshHealth()" class="db-banner-action" role="button">Retry</a>
+  </div>
+}
+
+<main class="app-content">
+  <router-outlet></router-outlet>
+</main>
+
+<footer class="app-footer">
+  Developer Knowledge &amp; Dependency Graph · ASP.NET Core + Angular + SQL Server
+</footer>

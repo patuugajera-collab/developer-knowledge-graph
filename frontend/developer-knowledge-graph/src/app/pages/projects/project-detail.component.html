@@ -1,0 +1,193 @@
+@if (loading) {
+  <div class="loading-container"><mat-icon fontIcon="rocket_launch" class="spin"></mat-icon><span>Loading project…</span></div>
+} @else if (error) {
+  <mat-card><mat-card-content>
+    <div class="error-state">
+      <mat-icon fontIcon="cloud_off"></mat-icon>
+      <p>Project not found or database unreachable.</p>
+    </div>
+  </mat-card-content></mat-card>
+} @else if (project) {
+  <div class="page-header">
+    <div>
+      <h1>{{ project.name }}</h1>
+      <p class="subtitle">{{ project.description }}</p>
+    </div>
+    <div class="page-actions">
+      <button mat-stroked-button color="primary" [routerLink]="['/graph']" [queryParams]="{ entityType: 'Project', id: project.id }">
+        <mat-icon fontIcon="hub"></mat-icon>
+        View in graph
+      </button>
+    </div>
+  </div>
+
+  <section class="stat-grid stat-grid-strip">
+    <mat-card appearance="outlined"><mat-card-content class="stat-cell">
+      <span class="stat-value">{{ project.developerCount }}</span><span class="stat-label">Developers</span>
+    </mat-card-content></mat-card>
+    <mat-card appearance="outlined"><mat-card-content class="stat-cell">
+      <span class="stat-value">{{ project.technologyCount }}</span><span class="stat-label">Technologies</span>
+    </mat-card-content></mat-card>
+    <mat-card appearance="outlined"><mat-card-content class="stat-cell">
+      <span class="stat-value">{{ project.repositoryCount }}</span><span class="stat-label">Repositories</span>
+    </mat-card-content></mat-card>
+    <mat-card appearance="outlined"><mat-card-content class="stat-cell">
+      <span class="stat-value">{{ project.taskCount }}</span><span class="stat-label">Tasks</span>
+    </mat-card-content></mat-card>
+  </section>
+
+  <mat-tab-group class="section-card">
+    <mat-tab label="Developers">
+      @if (developers.length === 0) {
+        <div class="empty-state"><mat-icon fontIcon="inbox"></mat-icon><p>No developers assigned.</p></div>
+      } @else {
+        <mat-list>
+          @for (d of developers; track d.developerId) {
+            <mat-list-item (click)="viewDeveloper(d.developerId)" class="list-link">
+              <mat-icon matListItemIcon fontIcon="engineering"></mat-icon>
+              <span matListItemTitle>{{ d.name }}</span>
+              <span matListItemLine>{{ d.role }} · since {{ d.since }} · {{ d.organizationName ?? 'Independent' }}</span>
+            </mat-list-item>
+          }
+        </mat-list>
+      }
+    </mat-tab>
+
+    <mat-tab label="Technologies">
+      @if (technologies.length === 0) {
+        <div class="empty-state"><mat-icon fontIcon="inbox"></mat-icon><p>No technologies recorded.</p></div>
+      } @else {
+        <mat-chip-set class="chip-grid">
+          @for (t of technologies; track t.technologyId) {
+            <mat-chip-row (click)="viewTechnology(t.technologyId)" class="tech-chip">
+              {{ t.technologyName }}
+              <span class="tech-meta">{{ t.category }}{{ t.purpose ? ' · ' + t.purpose : '' }}</span>
+            </mat-chip-row>
+          }
+        </mat-chip-set>
+      }
+    </mat-tab>
+
+    <mat-tab label="Tasks">
+      @if (tasks.length === 0) {
+        <div class="empty-state"><mat-icon fontIcon="inbox"></mat-icon><p>No tasks.</p></div>
+      } @else {
+        <mat-list>
+          @for (task of tasks; track task.taskId) {
+            <mat-list-item>
+              <mat-icon matListItemIcon fontIcon="checklist"></mat-icon>
+              <span matListItemTitle>{{ task.title }}</span>
+              <span matListItemLine>
+                priority {{ task.priority ?? '—' }}
+              </span>
+              <span matListItemMeta>
+                <span [class]="'status-chip status-' + task.status">{{ task.status }}</span>
+              </span>
+            </mat-list-item>
+          }
+        </mat-list>
+      }
+    </mat-tab>
+
+    <mat-tab label="Repositories">
+      @if (repositories.length === 0) {
+        <div class="empty-state"><mat-icon fontIcon="inbox"></mat-icon><p>No repositories.</p></div>
+      } @else {
+        <mat-list>
+          @for (r of repositories; track r.repositoryId) {
+            <mat-list-item>
+              <mat-icon matListItemIcon fontIcon="code"></mat-icon>
+              <span matListItemTitle>
+                <a [href]="r.url" target="_blank" rel="noopener">{{ r.repositoryName }}</a>
+              </span>
+            </mat-list-item>
+          }
+        </mat-list>
+      }
+    </mat-tab>
+
+    <mat-tab label="Contributors">
+      @if (contributors.length === 0) {
+        <div class="empty-state"><mat-icon fontIcon="inbox"></mat-icon><p>No contributors found.</p></div>
+      } @else {
+        <mat-list>
+          @for (c of contributors; track c.developerId) {
+            <mat-list-item (click)="viewDeveloper(c.developerId)" class="list-link">
+              <mat-icon matListItemIcon fontIcon="engineering"></mat-icon>
+              <span matListItemTitle>{{ c.developerName }}</span>
+              <span matListItemLine>{{ c.repositoryName }} · {{ c.contributionCount }} commits · {{ c.role }}</span>
+            </mat-list-item>
+          }
+        </mat-list>
+      }
+    </mat-tab>
+
+    <mat-tab label="Dependencies">
+      @if (dependencies.length === 0) {
+        <div class="empty-state"><mat-icon fontIcon="inbox"></mat-icon><p>No dependencies found.</p></div>
+      } @else {
+        <mat-list>
+          @for (dep of dependencies; track dep.projectId) {
+            <mat-list-item (click)="viewProject(dep.projectId)" class="list-link">
+              <mat-icon matListItemIcon fontIcon="account_tree"></mat-icon>
+              <span matListItemTitle>{{ dep.projectName }}</span>
+              <span matListItemLine>depth {{ dep.depth }}</span>
+              <span matListItemMeta>
+                <span [class]="'status-chip status-' + dep.projectStatus">{{ dep.projectStatus }}</span>
+              </span>
+            </mat-list-item>
+          }
+        </mat-list>
+      }
+    </mat-tab>
+
+    <mat-tab label="Recommended developers">
+      <div class="tab-intro">
+        Developers whose skills match this project's required technologies
+        (skill coverage of the project's task requirement graph).
+      </div>
+      @if (recommended.length === 0) {
+        <div class="empty-state"><mat-icon fontIcon="inbox"></mat-icon><p>No matching developers found.</p></div>
+      } @else {
+        <mat-list>
+          @for (r of recommended; track r.developerId) {
+            <mat-list-item (click)="viewDeveloper(r.developerId)" class="list-link">
+              <mat-icon matListItemIcon fontIcon="engineering"></mat-icon>
+              <span matListItemTitle>{{ r.name }}</span>
+              <span matListItemLine>
+                {{ r.role }} · {{ r.organizationName ?? 'Independent' }}
+              </span>
+              <span matListItemMeta>
+                <mat-chip-row disabled class="coverage-chip" [class.high-coverage]="r.coverage >= 0.5">
+                  {{ r.matchedSkills }}/{{ r.totalRequired }} skills ({{ coveragePct(r.coverage) }})
+                </mat-chip-row>
+              </span>
+            </mat-list-item>
+          }
+        </mat-list>
+      }
+    </mat-tab>
+
+    <mat-tab label="Indirect technologies">
+      <div class="tab-intro">
+        Technologies used by projects this project depends on, but not directly by this project —
+        the relationally awkward query (variable-length DEPENDS_ON traversal).
+      </div>
+      @if (indirectTechnologies.length === 0) {
+        <div class="empty-state"><mat-icon fontIcon="inbox"></mat-icon><p>No indirect technologies found.</p></div>
+      } @else {
+        <mat-list>
+          @for (t of indirectTechnologies; track t.technologyId + t.dependencyProjectId) {
+            <mat-list-item (click)="viewTechnology(t.technologyId)" class="list-link">
+              <mat-icon matListItemIcon fontIcon="memory"></mat-icon>
+              <span matListItemTitle>{{ t.technologyName }}</span>
+              <span matListItemLine>
+                via {{ t.dependencyProjectName }} at depth {{ t.depth }} · {{ t.category }}
+              </span>
+            </mat-list-item>
+          }
+        </mat-list>
+      }
+    </mat-tab>
+  </mat-tab-group>
+}

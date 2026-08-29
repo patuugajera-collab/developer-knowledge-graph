@@ -1,0 +1,59 @@
+.stat-grid-strip {
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  margin-bottom: 20px;
+}
+
+.stat-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 16px;
+
+  .stat-value {
+    font-size: 28px;
+    font-weight: 700;
+    color: rgba(0, 0, 0, 0.86);
+  }
+
+  .stat-label {
+    color: rgba(0, 0, 0, 0.55);
+    font-size: 12px;
+  }
+}
+
+.list-link {
+  cursor: pointer;
+  border-radius: 8px;
+
+  &:hover {
+    background: rgba(63, 81, 181, 0.05);
+  }
+}
+
+.chip-grid {
+  padding: 16px;
+}
+
+.tech-chip {
+  .tech-meta {
+    opacity: 0.65;
+    font-size: 12px;
+    margin-left: 6px;
+  }
+}
+
+.tab-intro {
+  padding: 14px 16px 6px;
+  color: rgba(0, 0, 0, 0.6);
+  font-size: 13px;
+}
+
+.coverage-chip {
+  font-size: 12px;
+
+  &.high-coverage {
+    background: #e1f5ea;
+    color: #177245;
+  }
+}

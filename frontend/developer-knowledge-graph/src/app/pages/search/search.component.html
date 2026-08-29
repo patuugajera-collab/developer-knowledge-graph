@@ -1,0 +1,51 @@
+<div class="page-header">
+  <div>
+    <h1>Search</h1>
+    <p class="subtitle">
+      @if (query) {
+        Results for “{{ query }}” — {{ total }} match{{ total === 1 ? '' : 'es' }}
+      } @else {
+        Type a query to find developers, projects, technologies or organizations.
+      }
+    </p>
+  </div>
+</div>
+
+@if (error) {
+  <mat-card><mat-card-content>
+    <div class="error-state">
+      <mat-icon fontIcon="cloud_off"></mat-icon>
+      <p>Unable to search. Please try again.</p>
+    </div>
+  </mat-card-content></mat-card>
+} @else if (loading) {
+  <div class="loading-container"><mat-icon fontIcon="search" class="spin"></mat-icon><span>Searching…</span></div>
+} @else {
+  @for (group of groups; track group.category) {
+    <mat-card class="section-card">
+      <div class="section-title">
+        <mat-icon fontIcon="{{ iconFor(group.category) }}"></mat-icon>
+        {{ group.category }} ({{ group.results.length }})
+      </div>
+      <mat-list>
+        @for (item of group.results; track item.id) {
+          <mat-list-item (click)="go(item)" class="list-link">
+            <mat-icon matListItemIcon fontIcon="{{ iconFor(item.type) }}"></mat-icon>
+            <span matListItemTitle>{{ item.name }}</span>
+            <span matListItemLine>{{ item.subtitle }}</span>
+            <mat-icon matListItemMeta fontIcon="chevron_right"></mat-icon>
+          </mat-list-item>
+        }
+      </mat-list>
+    </mat-card>
+  }
+
+  @if (!loading && groups.length === 0 && query) {
+    <mat-card><mat-card-content>
+      <div class="empty-state">
+        <mat-icon fontIcon="search_off"></mat-icon>
+        <p>Nothing matched “{{ query }}”.</p>
+      </div>
+    </mat-card-content></mat-card>
+  }
+}

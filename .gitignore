@@ -1,0 +1,42 @@
+# Environment / secrets - NEVER commit
+.env
+.env.local
+.env.*.local
+appsettings.Development.json
+
+# Visual Studio
+.vs/
+*.user
+*.suo
+*.userosscache
+
+# .NET build output
+bin/
+obj/
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+frontend/.angular/
+frontend/.tmp/
+
+# Angular tooling
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+.idea/
+*.code-workspace
+
+# Test results
+coverage/
+TestResults/
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Logs
+*.log
+npm-debug.log*
+
+# Screenshots are committed intentionally under docs/screenshots

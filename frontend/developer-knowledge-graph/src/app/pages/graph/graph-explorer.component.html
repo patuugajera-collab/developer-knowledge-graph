@@ -1,0 +1,200 @@
+<div class="page-header">
+  <div>
+    <h1>Graph Explorer</h1>
+    <p class="subtitle">
+      Traverse the knowledge graph from any node. Choose an entity and how deep to explore; click nodes to open them.
+    </p>
+  </div>
+</div>
+
+<mat-card class="controls-card">
+  <mat-card-content class="controls">
+    <mat-form-field appearance="outline">
+      <mat-label>Entity type</mat-label>
+      <mat-select [value]="entityType" (selectionChange)="onEntityTypeChange($event.value)">
+        @for (type of entityTypes; track type) {
+          <mat-option [value]="type">{{ type }}</mat-option>
+        }
+      </mat-select>
+    </mat-form-field>
+
+    <mat-form-field appearance="outline">
+      <mat-label>Entity</mat-label>
+      <mat-select [value]="selectedId" (selectionChange)="selectedId = $event.value">
+        @for (option of options; track option.id) {
+          <mat-option [value]="option.id">{{ option.name }}</mat-option>
+        }
+      </mat-select>
+    </mat-form-field>
+
+    <mat-form-field appearance="outline" class="depth-field">
+      <mat-label>Depth: {{ maxDepth }}</mat-label>
+      <mat-select [value]="maxDepth" (selectionChange)="onDepthChange($event.value)">
+        @for (d of [1, 2, 3, 4, 5, 6]; track d) {
+          <mat-option [value]="d">{{ d }}</mat-option>
+        }
+      </mat-select>
+    </mat-form-field>
+
+    <button mat-flat-button color="primary" (click)="loadGraph()" [disabled]="loading || !selectedId">
+      <mat-icon fontIcon="hub"></mat-icon>
+      Explore
+    </button>
+  </mat-card-content>
+</mat-card>
+
+@if (offlineMode) {
+  <div class="offline-banner">
+    <mat-icon fontIcon="cloud_off"></mat-icon>
+    <span>
+      API unavailable — showing a <strong>demo graph</strong>. Start the backend to load live data.
+    </span>
+  </div>
+}
+
+@if (error) {
+  <mat-card><mat-card-content>
+    <div class="error-state">
+      <mat-icon fontIcon="cloud_off"></mat-icon>
+      <p>Unable to load the graph. Please try again.</p>
+    </div>
+  </mat-card-content></mat-card>
+} @else if (loading) {
+  <div class="loading-container">
+    <mat-icon fontIcon="hub" class="spin"></mat-icon>
+    <span>Traversing nodes and relationships…</span>
+  </div>
+} @else if (graph) {
+  <mat-card class="graph-card">
+    <mat-card-content>
+      <div class="legend">
+        @for (type of nodeTypeKeys; track type) {
+          <span class="legend-item">
+            <span class="legend-dot" [style.background]="nodeColor(type)"></span>
+            {{ type }}
+          </span>
+        }
+        <span class="legend-stats">{{ nodes.length }} nodes · {{ links.length }} relationships · depth {{ maxDepth }}</span>
+      </div>
+
+      <svg
+        #graphCanvas
+        class="graph-canvas"
+        viewBox="0 0 800 640"
+        preserveAspectRatio="xMidYMid meet"
+      >
+        <!-- Relationship links -->
+        <g class="links">
+          @for (link of links; track link.id) {
+            <line
+              [attr.x1]="nodeX(link.source)"
+              [attr.y1]="nodeY(link.source)"
+              [attr.x2]="nodeX(link.target)"
+              [attr.y2]="nodeY(link.target)"
+              class="link-line"
+            />
+          }
+        </g>
+
+        <!-- Nodes -->
+        <g class="nodes">
+          @for (node of nodes; track node.id) {
+            <g
+              class="node-group"
+              [class.dimmed]="isDimmed(node.id)"
+              (mouseenter)="onHover(node.id)"
+              (mouseleave)="onHover(null)"
+              (click)="openNode(node)"
+            >
+              <circle
+                [attr.cx]="node.x!"
+                [attr.cy]="node.y!"
+                [attr.r]="node.r"
+                [attr.fill]="node.color"
+                [class.root]="node.id === graph.rootId"
+                class="node-circle"
+              />
+              <text
+                [attr.x]="node.x!"
+                [attr.y]="node.y! + 4"
+                class="node-label"
+              >
+                {{ node.label }}
+              </text>
+            </g>
+          }
+        </g>
+      </svg>
+
+      @if (hoveredId) {
+        <div class="hover-hint">
+          Showing direct relationships from
+          <strong>{{ hoveredName(hoveredId) }}</strong>
+        </div>
+      }
+    </mat-card-content>
+  </mat-card>
+}
+
+<mat-card class="path-card">
+  <mat-card-content>
+    <div class="section-title">
+      <mat-icon fontIcon="route"></mat-icon>
+      Shortest path: developer → project
+    </div>
+    <div class="path-controls">
+      <mat-form-field appearance="outline">
+        <mat-label>Developer</mat-label>
+        <mat-select [value]="pathDeveloperId" (selectionChange)="pathDeveloperId = $event.value">
+          @for (dev of developerOptions; track dev.id) {
+            <mat-option [value]="dev.id">{{ dev.name }}</mat-option>
+          }
+        </mat-select>
+      </mat-form-field>
+
+      <mat-form-field appearance="outline">
+        <mat-label>Project</mat-label>
+        <mat-select [value]="pathProjectId" (selectionChange)="pathProjectId = $event.value">
+          @for (proj of projectOptions; track proj.id) {
+            <mat-option [value]="proj.id">{{ proj.name }}</mat-option>
+          }
+        </mat-select>
+      </mat-form-field>
+
+      <button mat-flat-button color="accent" (click)="findPath()" [disabled]="pathLoading || !pathDeveloperId || !pathProjectId">
+        <mat-icon fontIcon="route"></mat-icon>
+        Find path
+      </button>
+    </div>
+
+    @if (pathLoading) {
+      <div class="loading-container mini"><mat-icon fontIcon="hub" class="spin"></mat-icon><span>Searching…</span></div>
+    } @else if (path) {
+      <div class="path-result">
+        @if (path.length > 0) {
+          <ol>
+            @for (step of path.steps; track step.nodeId) {
+              <li>
+                <button
+                  mat-stroked-button
+                  class="path-node"
+                  (click)="openPathNode(step)"
+                  [class.relationship-after]="$index < path.length"
+                >
+                  <mat-icon fontIcon="{{ iconForStep(step) }}"></mat-icon>
+                  {{ step.nodeName }}
+                </button>
+                @if ($index < path.length) {
+                  <span class="relationship">{{ path.steps[$index + 1].relationship }}</span>
+                }
+              </li>
+            }
+          </ol>
+          <p class="path-meta">{{ path.length }} hop{{ path.length === 1 ? '' : 's' }} · {{ path.developerName }} → {{ path.projectName }}</p>
+        } @else {
+          <div class="empty-state"><mat-icon fontIcon="block"></mat-icon><p>No path found between {{ path.developerName }} and {{ path.projectName }}.</p></div>
+        }
+      </div>
+    }
+  </mat-card-content>
+</mat-card>

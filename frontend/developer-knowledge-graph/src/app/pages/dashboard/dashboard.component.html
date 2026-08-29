@@ -1,0 +1,141 @@
+<div class="page-header">
+  <div>
+    <h1>Knowledge Graph Dashboard</h1>
+    <p class="subtitle">
+      Live view of the developer ecosystem stored in the SQL Server graph: people, projects, technologies and how they connect.
+    </p>
+  </div>
+  <div class="page-actions">
+    <button mat-flat-button color="primary" (click)="openRoute('graph')">
+      <mat-icon fontIcon="hub"></mat-icon>
+      Explore the graph
+    </button>
+  </div>
+</div>
+
+@if (error) {
+  <mat-card>
+    <mat-card-content>
+      <div class="error-state">
+        <mat-icon fontIcon="cloud_off"></mat-icon>
+        <h3>Unable to connect to the database</h3>
+        <p>Please try again.</p>
+      </div>
+    </mat-card-content>
+  </mat-card>
+} @else if (!stats) {
+  <div class="loading-container">
+    <mat-icon fontIcon="hub" class="spin"></mat-icon>
+    <span>Loading graph statistics…</span>
+  </div>
+} @else {
+  <section class="stat-grid">
+    <mat-card class="stat-card" appearance="outlined">
+      <mat-card-content class="stat-cell">
+        <mat-icon fontIcon="engineering"></mat-icon>
+        <span class="stat-value">{{ stats.developers }}</span>
+        <span class="stat-label">Developers</span>
+      </mat-card-content>
+    </mat-card>
+
+    <mat-card class="stat-card" appearance="outlined">
+      <mat-card-content class="stat-cell">
+        <mat-icon fontIcon="rocket_launch"></mat-icon>
+        <span class="stat-value">{{ stats.projects }}</span>
+        <span class="stat-label">Projects</span>
+      </mat-card-content>
+    </mat-card>
+
+    <mat-card class="stat-card" appearance="outlined">
+      <mat-card-content class="stat-cell">
+        <mat-icon fontIcon="memory"></mat-icon>
+        <span class="stat-value">{{ stats.technologies }}</span>
+        <span class="stat-label">Technologies</span>
+      </mat-card-content>
+    </mat-card>
+
+    <mat-card class="stat-card" appearance="outlined">
+      <mat-card-content class="stat-cell">
+        <mat-icon fontIcon="account_tree"></mat-icon>
+        <span class="stat-value">{{ stats.relationships }}</span>
+        <span class="stat-label">Relationships</span>
+      </mat-card-content>
+    </mat-card>
+
+    <mat-card class="stat-card" appearance="outlined">
+      <mat-card-content class="stat-cell">
+        <mat-icon fontIcon="groups"></mat-icon>
+        <span class="stat-value">{{ stats.organizations }}</span>
+        <span class="stat-label">Organizations</span>
+      </mat-card-content>
+    </mat-card>
+
+    <mat-card class="stat-card" appearance="outlined">
+      <mat-card-content class="stat-cell">
+        <mat-icon fontIcon="stockpot"></mat-icon>
+        <span class="stat-value">{{ stats.repositories }}</span>
+        <span class="stat-label">Repositories</span>
+      </mat-card-content>
+    </mat-card>
+  </section>
+
+  @if (stats.topTechnologies.length > 0) {
+    <mat-card class="section-card">
+      <div class="section-title">
+        <mat-icon fontIcon="bar_chart"></mat-icon>
+        Most central technologies
+      </div>
+      <mat-card-content>
+        <mat-list>
+          @for (tech of stats.topTechnologies; track tech.id) {
+            <mat-list-item (click)="openRoute('technologies/' + tech.id)" class="list-link">
+              <mat-icon matListItemIcon fontIcon="memory"></mat-icon>
+              <span matListItemTitle>
+                {{ tech.name }}
+                <span class="tech-category">· {{ tech.category }}</span>
+              </span>
+              <span matListItemMeta>
+                <mat-chip-row disabled class="tech-chip"
+                  >{{ tech.projectUsage }} projects · {{ tech.skillCount }} skills</mat-chip-row
+                >
+              </span>
+            </mat-list-item>
+          }
+        </mat-list>
+      </mat-card-content>
+    </mat-card>
+  }
+
+  @if (stats.projectStatus.length > 0) {
+    <mat-card class="section-card">
+      <div class="section-title">
+        <mat-icon fontIcon="donut_small"></mat-icon>
+        Projects by status
+      </div>
+      <mat-card-content class="status-row">
+        @for (entry of stats.projectStatus; track entry.status) {
+          <mat-chip-row disabled [class]="'status-chip status-' + entry.status"
+            >{{ entry.status }} · {{ entry.count }}</mat-chip-row
+          >
+        }
+      </mat-card-content>
+    </mat-card>
+  }
+
+  <mat-card class="section-card">
+    <div class="section-title">
+      <mat-icon fontIcon="coronavirus"></mat-icon>
+      Relationship types
+    </div>
+    <mat-card-content>
+      <mat-list>
+        @for (rel of stats.relationshipTypes; track rel.type) {
+          <mat-list-item>
+            <span matListItemTitle class="rel-type">{{ rel.type }}</span>
+            <span matListItemMeta>{{ rel.count }} relationships</span>
+          </mat-list-item>
+        }
+      </mat-list>
+    </mat-card-content>
+  </mat-card>
+}

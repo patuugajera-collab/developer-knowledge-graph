@@ -1,0 +1,141 @@
+.app-toolbar {
+  gap: 4px;
+  padding: 0 12px;
+
+  .brand {
+    display: inline-flex;
+    align-items: center;
+    color: #fff;
+    font-weight: 700;
+    font-size: 20px;
+    letter-spacing: 0.2px;
+    text-decoration: none;
+    margin-right: 8px;
+
+    .brand-accent {
+      color: #b3c6ff;
+    }
+  }
+
+  .brand-icon {
+    margin-right: 6px;
+  }
+
+  .spacer {
+    flex: 1 1 auto;
+  }
+
+  .nav-links {
+    display: flex;
+    gap: 2px;
+
+    a {
+      color: rgba(255, 255, 255, 0.88);
+      font-weight: 500;
+      font-size: 14px;
+      text-decoration: none;
+      padding: 8px 12px;
+      border-radius: 6px;
+      transition: background-color 120ms ease;
+
+      &:hover {
+        background: rgba(255, 255, 255, 0.14);
+      }
+
+      &.active-link {
+        background: rgba(255, 255, 255, 0.22);
+        color: #fff;
+      }
+    }
+  }
+
+  .search-form {
+    width: min(340px, 100%);
+    margin: 0 8px;
+
+    .search-field {
+      width: 100%;
+
+      &.mat-form-field-appearance-outline .mat-mdc-text-field-wrapper {
+        background: rgba(255, 255, 255, 0.14);
+        border-radius: 24px;
+      }
+    }
+
+    .search-subtitle {
+      opacity: 0.7;
+      font-size: 12px;
+    }
+  }
+
+  .mobile-menu {
+    display: none;
+  }
+
+  .health-indicator {
+    margin-left: 4px;
+
+    .health-ok {
+      color: #7ce495;
+    }
+
+    .health-bad {
+      color: #ff9a9a;
+    }
+  }
+}
+
+.db-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  background: #fdecea;
+  color: #b3261e;
+  font-size: 14px;
+
+  mat-icon {
+    font-size: 20px;
+    height: 20px;
+    width: 20px;
+  }
+
+  .db-banner-action {
+    color: #7f1d1d;
+    font-weight: 600;
+    cursor: pointer;
+    text-decoration: underline;
+    margin-left: 4px;
+  }
+}
+
+.app-content {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 24px 20px 48px;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.app-footer {
+  text-align: center;
+  color: rgba(0, 0, 0, 0.5);
+  font-size: 13px;
+  padding: 24px;
+}
+
+@media (max-width: 880px) {
+  .app-toolbar {
+    .nav-links {
+      display: none;
+    }
+
+    .mobile-menu {
+      display: inline-flex;
+    }
+
+    .search-form {
+      width: min(220px, 100%);
+    }
+  }
+}

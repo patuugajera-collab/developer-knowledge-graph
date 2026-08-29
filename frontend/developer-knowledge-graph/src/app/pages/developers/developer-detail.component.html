@@ -1,0 +1,91 @@
+@if (loading) {
+  <div class="loading-container"><mat-icon fontIcon="engineering" class="spin"></mat-icon><span>Loading developer…</span></div>
+} @else if (error) {
+  <mat-card><mat-card-content>
+    <div class="error-state">
+      <mat-icon fontIcon="person_off"></mat-icon>
+      <p>Developer not found or database unreachable.</p>
+    </div>
+  </mat-card-content></mat-card>
+} @else if (developer) {
+  <div class="page-header">
+    <div>
+      <h1>{{ developer.name }}</h1>
+      <p class="subtitle">
+        {{ developer.role }} · {{ developer.organizationName ?? 'Independent' }} · {{ developer.email }}
+      </p>
+    </div>
+    <div class="page-actions">
+      <button mat-stroked-button color="primary" [routerLink]="['/graph']" [queryParams]="{ entityType: 'Developer', id: developer.id }">
+        <mat-icon fontIcon="hub"></mat-icon>
+        View in graph
+      </button>
+    </div>
+  </div>
+
+  <section class="stat-grid stat-grid-strip">
+    <mat-card appearance="outlined"><mat-card-content class="stat-cell">
+      <span class="stat-value">{{ developer.projectCount }}</span><span class="stat-label">Projects</span>
+    </mat-card-content></mat-card>
+    <mat-card appearance="outlined"><mat-card-content class="stat-cell">
+      <span class="stat-value">{{ developer.skillCount }}</span><span class="stat-label">Skills</span>
+    </mat-card-content></mat-card>
+    <mat-card appearance="outlined"><mat-card-content class="stat-cell">
+      <span class="stat-value">{{ developer.repositoryCount }}</span><span class="stat-label">Repositories</span>
+    </mat-card-content></mat-card>
+  </section>
+
+  <mat-tab-group class="section-card">
+    <mat-tab label="Projects">
+      @if (projects.length === 0) {
+        <div class="empty-state"><mat-icon fontIcon="inbox"></mat-icon><p>No projects yet.</p></div>
+      } @else {
+        <mat-list>
+          @for (p of projects; track p.projectId) {
+            <mat-list-item (click)="viewProject(p.projectId)" class="list-link">
+              <mat-icon matListItemIcon fontIcon="rocket_launch"></mat-icon>
+              <span matListItemTitle>{{ p.projectName }}</span>
+              <span matListItemLine>{{ p.role }} · since {{ p.since }}</span>
+              <span matListItemMeta>
+                <span [class]="'status-chip status-' + p.projectStatus">{{ p.projectStatus }}</span>
+              </span>
+            </mat-list-item>
+          }
+        </mat-list>
+      }
+    </mat-tab>
+
+    <mat-tab label="Skills">
+      @if (skills.length === 0) {
+        <div class="empty-state"><mat-icon fontIcon="memory"></mat-icon><p>No skills recorded.</p></div>
+      } @else {
+        <mat-chip-set class="chip-grid">
+          @for (s of skills; track s.technologyId) {
+            <mat-chip-row (click)="viewTechnology(s.technologyId)" class="skill-chip">
+              {{ s.technologyName }}
+              <span class="skill-meta">{{ s.proficiency }} · since {{ s.since }}</span>
+            </mat-chip-row>
+          }
+        </mat-chip-set>
+      }
+    </mat-tab>
+
+    <mat-tab label="Repositories">
+      @if (repositories.length === 0) {
+        <div class="empty-state"><mat-icon fontIcon="inbox"></mat-icon><p>No repositories contributed to.</p></div>
+      } @else {
+        <mat-list>
+          @for (r of repositories; track r.repositoryId) {
+            <mat-list-item>
+              <mat-icon matListItemIcon fontIcon="code"></mat-icon>
+              <span matListItemTitle>
+                <a [href]="r.url" target="_blank" rel="noopener">{{ r.repositoryName }}</a>
+              </span>
+              <span matListItemLine>{{ r.contributionCount }} contributions · since {{ r.since }}</span>
+            </mat-list-item>
+          }
+        </mat-list>
+      }
+    </mat-tab>
+  </mat-tab-group>
+}

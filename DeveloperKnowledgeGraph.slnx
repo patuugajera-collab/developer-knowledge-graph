@@ -1,0 +1,12 @@
+<Solution>
+  <Folder Name="/src/" />
+  <Folder Name="/src/Api/">
+    <Project Path="src/Api/DeveloperKnowledgeGraph.Api.csproj" />
+  </Folder>
+  <Folder Name="/src/SeedTool/">
+    <Project Path="src/SeedTool/DeveloperKnowledgeGraph.SeedTool.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/DeveloperKnowledgeGraph.Tests/DeveloperKnowledgeGraph.Tests.csproj" />
+  </Folder>
+</Solution>

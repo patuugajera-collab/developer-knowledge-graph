@@ -1,0 +1,23 @@
+.search-field {
+  width: min(340px, 100%);
+}
+
+.category-field {
+  width: 200px;
+}
+
+.name-cell {
+  .tech-name {
+    font-weight: 600;
+    color: rgba(0, 0, 0, 0.84);
+  }
+}
+
+.entity-avatar.tech {
+  background: #9c27b0;
+  margin-right: 10px;
+}
+
+.cat-chip {
+  font-size: 12px;
+}

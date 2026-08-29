@@ -1,0 +1,17 @@
+.search-field {
+  width: min(360px, 100%);
+}
+
+.name-cell {
+  min-width: 220px;
+
+  .cell-email {
+    color: rgba(0, 0, 0, 0.55);
+    font-size: 12px;
+    font-weight: 400;
+  }
+}
+
+.entity-avatar.dev {
+  background: #5c6bc0;
+}

@@ -1,0 +1,72 @@
+<div class="page-header">
+  <div>
+    <h1>Technologies</h1>
+    <p class="subtitle">Languages, frameworks and tools — who uses them and who is skilled in them.</p>
+  </div>
+</div>
+
+<div class="filter-row">
+  <mat-form-field appearance="outline" class="search-field">
+    <mat-icon matPrefix fontIcon="search"></mat-icon>
+    <input matInput placeholder="Search technologies" [value]="search" (input)="onSearchChange($any($event.target).value)" />
+  </mat-form-field>
+
+  <mat-form-field appearance="outline" class="category-field">
+    <mat-label>Category</mat-label>
+    <mat-select [value]="category" (selectionChange)="onCategoryChange($event.value)">
+      <mat-option value="">All</mat-option>
+      @for (option of categories; track option) {
+        <mat-option [value]="option">{{ option }}</mat-option>
+      }
+    </mat-select>
+  </mat-form-field>
+</div>
+
+@if (error) {
+  <mat-card><mat-card-content>
+    <div class="error-state">
+      <mat-icon fontIcon="cloud_off"></mat-icon>
+      <p>Unable to load technologies. Please try again.</p>
+    </div>
+  </mat-card-content></mat-card>
+} @else if (loading && technologies.length === 0) {
+  <div class="loading-container"><mat-icon fontIcon="memory" class="spin"></mat-icon><span>Loading technologies…</span></div>
+} @else if (technologies.length === 0) {
+  <mat-card><mat-card-content>
+    <div class="empty-state">
+      <mat-icon fontIcon="memory"></mat-icon>
+      <p>No technologies matched your filters.</p>
+    </div>
+  </mat-card-content></mat-card>
+} @else {
+  <mat-card class="section-card">
+    <div class="table-scroll">
+      <table mat-table [dataSource]="technologies" class="data-table">
+        <ng-container matColumnDef="name">
+          <th mat-header-cell *matHeaderCellDef>Technology</th>
+          <td mat-cell *matCellDef="let t" class="name-cell">
+            <span class="entity-avatar tech">{{ initials(t.name) }}</span>
+            <span class="tech-name">{{ t.name }}</span>
+          </td>
+        </ng-container>
+
+        <ng-container matColumnDef="category">
+          <th mat-header-cell *matHeaderCellDef>Category</th>
+          <td mat-cell *matCellDef="let t">
+            <mat-chip-row disabled class="cat-chip">{{ t.category }}</mat-chip-row>
+          </td>
+        </ng-container>
+
+        <tr mat-header-row *matHeaderRowDef="displayedColumns"></tr>
+        <tr mat-row *matRowDef="let row; columns: displayedColumns" (click)="open(row.id)" class="clickable-row"></tr>
+      </table>
+    </div>
+    <mat-paginator
+      [length]="totalCount"
+      [pageSize]="pageSize"
+      [pageSizeOptions]="[10, 20, 50]"
+      [showFirstLastButtons]="true"
+      (page)="onPageChange($event)"
+    ></mat-paginator>
+  </mat-card>
+}

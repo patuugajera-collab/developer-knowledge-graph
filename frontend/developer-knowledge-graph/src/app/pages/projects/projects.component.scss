@@ -1,0 +1,19 @@
+.search-field {
+  width: min(340px, 100%);
+}
+
+.status-field {
+  width: 180px;
+}
+
+.project-cell {
+  .project-name {
+    font-weight: 600;
+    color: rgba(0, 0, 0, 0.84);
+  }
+}
+
+.entity-avatar.project {
+  background: #5c6bc0;
+  margin-right: 10px;
+}

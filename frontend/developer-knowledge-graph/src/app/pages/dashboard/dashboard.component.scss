@@ -1,0 +1,68 @@
+.stat-card {
+  .stat-cell {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    text-align: center;
+    padding: 20px;
+
+    mat-icon {
+      font-size: 30px;
+      height: 30px;
+      width: 30px;
+      color: #5c6bc0;
+    }
+
+    .stat-value {
+      font-size: 34px;
+      font-weight: 700;
+      color: rgba(0, 0, 0, 0.86);
+      line-height: 1.1;
+    }
+
+    .stat-label {
+      color: rgba(0, 0, 0, 0.58);
+      font-size: 13px;
+      letter-spacing: 0.3px;
+    }
+  }
+}
+
+.section-card {
+  margin-top: 20px;
+
+  .section-title {
+    padding: 16px 16px 0;
+    margin-bottom: 4px;
+  }
+}
+
+.list-link {
+  cursor: pointer;
+
+  &:hover {
+    background: rgba(63, 81, 181, 0.05);
+  }
+}
+
+.tech-category {
+  color: rgba(0, 0, 0, 0.5);
+  font-weight: 400;
+}
+
+.tech-chip {
+  font-size: 12px;
+}
+
+.status-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding-bottom: 16px;
+}
+
+.rel-type {
+  font-family: 'Roboto Mono', 'Courier New', monospace;
+  font-weight: 600;
+}
