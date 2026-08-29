@@ -1,16 +1,16 @@
-﻿using DeveloperKnowledgeGraph.Api.Data;
-using DeveloperKnowledgeGraph.Api.Data.Entities;
-using Microsoft.EntityFrameworkCore;
+﻿using Neo4j.Driver;
 
-var connectionString = ResolveConnectionString(args);
+var (uri, password) = ResolveCredentials(args);
 
-Console.WriteLine($"Connecting to SQL Server ...");
+Console.WriteLine($"Connecting to CognoDB ({uri}) ...");
 
-await using var db = CreateContext(connectionString);
+using var driver = GraphDatabase.Driver(uri, AuthTokens.Basic("cognodb", password));
 
 try
 {
-    await db.Database.CanConnectAsync();
+    await using var session = driver.AsyncSession();
+    var probe = await session.RunAsync("RETURN 1");
+    await probe.ConsumeAsync();
 }
 catch (Exception ex)
 {
@@ -18,552 +18,571 @@ catch (Exception ex)
     return 1;
 }
 
-Console.WriteLine("Connected to SQL Server.\n");
+Console.WriteLine("Connected to CognoDB.\n");
 
-Console.WriteLine("Recreating database schema ...");
-await db.Database.EnsureDeletedAsync();
-await db.Database.EnsureCreatedAsync();
-Console.WriteLine("Schema ready.\n");
+await EnsureConstraints(driver);
+Console.WriteLine("Constraints ready.\n");
 
-Seed(db);
-
-await db.SaveChangesAsync();
+await Seed(driver);
 
 Console.WriteLine("Seed completed successfully.");
 return 0;
 
-static string ResolveConnectionString(string[] args)
+static (string Uri, string Password) ResolveCredentials(string[] args)
 {
-    if (args.Length > 0)
-    {
-        return args[0];
-    }
+    var uri = args.Length > 0
+        ? args[0]
+        : Environment.GetEnvironmentVariable("DEFAULT_CONNECTION")
+          ?? "bolt+s://db-5e76cc8b.bravo.databases.cognodb.com";
 
-    var env = Environment.GetEnvironmentVariable("DEFAULT_CONNECTION");
-    if (!string.IsNullOrWhiteSpace(env))
-    {
-        return env!;
-    }
+    var password = args.Length > 1
+        ? args[1]
+        : Environment.GetEnvironmentVariable("COGNODB_PASSWORD")
+          ?? throw new InvalidOperationException(
+              "Connection failed: no CognoDB password supplied. Set COGNODB_PASSWORD or pass it as the second argument.");
 
-    return "Server=(localdb)\\MSSQLLocalDB;Database=DeveloperKnowledgeGraph;Trusted_Connection=True;TrustServerCertificate=True;";
+    return (uri, password);
 }
 
-static AppDbContext CreateContext(string connectionString)
+static async Task EnsureConstraints(IDriver driver)
 {
-    var options = new DbContextOptionsBuilder<AppDbContext>()
-        .UseSqlServer(connectionString)
-        .Options;
+    const string constraints = """
+        CREATE CONSTRAINT developer_id IF NOT EXISTS FOR (d:Developer) REQUIRE d.id IS UNIQUE;
+        CREATE CONSTRAINT project_id IF NOT EXISTS FOR (p:Project) REQUIRE p.id IS UNIQUE;
+        CREATE CONSTRAINT technology_id IF NOT EXISTS FOR (t:Technology) REQUIRE t.id IS UNIQUE;
+        CREATE CONSTRAINT organization_id IF NOT EXISTS FOR (o:Organization) REQUIRE o.id IS UNIQUE;
+        CREATE CONSTRAINT repository_id IF NOT EXISTS FOR (r:Repository) REQUIRE r.id IS UNIQUE;
+        CREATE CONSTRAINT task_id IF NOT EXISTS FOR (task:Task) REQUIRE task.id IS UNIQUE;
+        """;
 
-    return new AppDbContext(options);
+    await using var session = driver.AsyncSession();
+    await session.ExecuteWriteAsync(tx => tx.RunAsync(constraints));
 }
 
-static void Seed(AppDbContext db)
+static async Task Seed(IDriver driver)
 {
-    SeedOrganizations(db);
-    SeedDevelopers(db);
-    SeedProjects(db);
-    SeedTechnologies(db);
-    SeedRepositories(db);
-    SeedTasks(db);
-    SeedWorksFor(db);
-    SeedOwns(db);
-    SeedWorksOn(db);
-    SeedUses(db);
-    SeedDependsOn(db);
-    SeedHasSkill(db);
-    SeedContributedTo(db);
-    SeedRequiresSkill(db);
+    await using var session = driver.AsyncSession();
+
+    await session.ExecuteWriteAsync(tx => tx.RunAsync(
+        """
+        UNWIND $rows AS row
+        MERGE (o:Organization {id: row.id})
+        SET o.name = row.name
+        """,
+        new { rows = SeedData.Organizations }));
+
+    await session.ExecuteWriteAsync(tx => tx.RunAsync(
+        """
+        UNWIND $rows AS row
+        MERGE (d:Developer {id: row.id})
+        SET d.name = row.name, d.email = row.email, d.role = row.role
+        """,
+        new { rows = SeedData.Developers }));
+
+    await session.ExecuteWriteAsync(tx => tx.RunAsync(
+        """
+        UNWIND $rows AS row
+        MERGE (p:Project {id: row.id})
+        SET p.name = row.name, p.description = row.description, p.status = row.status
+        """,
+        new { rows = SeedData.Projects }));
+
+    await session.ExecuteWriteAsync(tx => tx.RunAsync(
+        """
+        UNWIND $rows AS row
+        MERGE (t:Technology {id: row.id})
+        SET t.name = row.name, t.category = row.category
+        """,
+        new { rows = SeedData.Technologies }));
+
+    await session.ExecuteWriteAsync(tx => tx.RunAsync(
+        """
+        UNWIND $rows AS row
+        MERGE (r:Repository {id: row.id})
+        SET r.name = row.name, r.url = row.url
+        WITH r, row
+        MATCH (p:Project {id: row.projectId})
+        MERGE (r)-[:BELONGS_TO]->(p)
+        """,
+        new { rows = SeedData.Repositories }));
+
+    await session.ExecuteWriteAsync(tx => tx.RunAsync(
+        """
+        UNWIND $rows AS row
+        MERGE (t:Task {id: row.id})
+        SET t.title = row.title, t.status = row.status, t.priority = row.priority
+        WITH t, row
+        MATCH (p:Project {id: row.projectId})
+        MERGE (p)-[:HAS_TASK]->(t)
+        """,
+        new { rows = SeedData.Tasks }));
+
+    await session.ExecuteWriteAsync(tx => tx.RunAsync(
+        """
+        UNWIND $rows AS row
+        MATCH (d:Developer {id: row.developerId})
+        MATCH (o:Organization {id: row.organizationId})
+        MERGE (d)-[:WORKS_FOR {since: row.since}]->(o)
+        """,
+        new { rows = SeedData.WorksFor }));
+
+    await session.ExecuteWriteAsync(tx => tx.RunAsync(
+        """
+        UNWIND $rows AS row
+        MATCH (o:Organization {id: row.organizationId})
+        MATCH (p:Project {id: row.projectId})
+        MERGE (o)-[:OWNS]->(p)
+        """,
+        new { rows = SeedData.Owns }));
+
+    await session.ExecuteWriteAsync(tx => tx.RunAsync(
+        """
+        UNWIND $rows AS row
+        MATCH (d:Developer {id: row.developerId})
+        MATCH (p:Project {id: row.projectId})
+        MERGE (d)-[r:WORKS_ON]->(p)
+        SET r.role = row.role, r.since = row.since
+        """,
+        new { rows = SeedData.WorksOn }));
+
+    await session.ExecuteWriteAsync(tx => tx.RunAsync(
+        """
+        UNWIND $rows AS row
+        MATCH (p:Project {id: row.projectId})
+        MATCH (t:Technology {id: row.technologyId})
+        MERGE (p)-[r:USES]->(t)
+        SET r.purpose = row.purpose
+        """,
+        new { rows = SeedData.Uses }));
+
+    await session.ExecuteWriteAsync(tx => tx.RunAsync(
+        """
+        UNWIND $rows AS row
+        MATCH (p:Project {id: row.projectId})
+        MATCH (dep:Project {id: row.dependencyProjectId})
+        MERGE (p)-[:DEPENDS_ON]->(dep)
+        """,
+        new { rows = SeedData.DependsOn }));
+
+    await session.ExecuteWriteAsync(tx => tx.RunAsync(
+        """
+        UNWIND $rows AS row
+        MATCH (d:Developer {id: row.developerId})
+        MATCH (t:Technology {id: row.technologyId})
+        MERGE (d)-[r:HAS_SKILL]->(t)
+        SET r.proficiency = row.proficiency, r.since = row.since
+        """,
+        new { rows = SeedData.HasSkill }));
+
+    await session.ExecuteWriteAsync(tx => tx.RunAsync(
+        """
+        UNWIND $rows AS row
+        MATCH (d:Developer {id: row.developerId})
+        MATCH (r:Repository {id: row.repositoryId})
+        MERGE (d)-[c:CONTRIBUTED_TO]->(r)
+        SET c.contributionCount = row.contributionCount, c.since = row.since
+        """,
+        new { rows = SeedData.ContributedTo }));
+
+    await session.ExecuteWriteAsync(tx => tx.RunAsync(
+        """
+        UNWIND $rows AS row
+        MATCH (t:Task {id: row.taskId})
+        MATCH (tech:Technology {id: row.technologyId})
+        MERGE (t)-[:REQUIRES_SKILL]->(tech)
+        """,
+        new { rows = SeedData.RequiresSkill }));
 }
 
-static void SeedOrganizations(AppDbContext db)
+// ---------------------------------------------------------------------------
+// Seed data
+// ---------------------------------------------------------------------------
+
+static class SeedData
 {
-    var data = new[]
-    {
-        (Id: "o1", Name: "Acme Corp"),
-        (Id: "o2", Name: "Nimbus Labs"),
-        (Id: "o3", Name: "Helix Industries"),
-        (Id: "o4", Name: "Beacon Soft"),
-        (Id: "o5", Name: "OpenVox"),
-        (Id: "o6", Name: "Cobalt Systems"),
-        (Id: "o7", Name: "Vertex Robotics"),
-        (Id: "o8", Name: "Zephyr Media"),
-        (Id: "o9", Name: "Ironclad Logistics"),
-    };
-
-    foreach (var row in data)
-    {
-        db.Organizations.Add(new Organization { Id = row.Id, Name = row.Name });
-    }
-}
-
-static void SeedDevelopers(AppDbContext db)
+public static readonly object[] Organizations =
 {
-    var data = new[]
-    {
-        (Id: "d1", Name: "Alice Chen", Email: "alice.chen@example.com", Role: "Backend Engineer"),
-        (Id: "d2", Name: "Marcus Johnson", Email: "marcus.johnson@example.com", Role: "Frontend Engineer"),
-        (Id: "d3", Name: "Priya Sharma", Email: "priya.sharma@example.com", Role: "Full-Stack Engineer"),
-        (Id: "d4", Name: "Diego Martinez", Email: "diego.martinez@example.com", Role: "DevOps Engineer"),
-        (Id: "d5", Name: "Emily Watson", Email: "emily.watson@example.com", Role: "Data Engineer"),
-        (Id: "d6", Name: "Omar Farouk", Email: "omar.farouk@example.com", Role: "ML Engineer"),
-        (Id: "d7", Name: "Sofia Rossi", Email: "sofia.rossi@example.com", Role: "QA Engineer"),
-        (Id: "d8", Name: "Liam O'Brien", Email: "liam.obrien@example.com", Role: "Backend Engineer"),
-        (Id: "d9", Name: "Yuki Tanaka", Email: "yuki.tanaka@example.com", Role: "Frontend Engineer"),
-        (Id: "d10", Name: "Aisha Bello", Email: "aisha.bello@example.com", Role: "Product Engineer"),
-        (Id: "d11", Name: "Noah Kim", Email: "noah.kim@example.com", Role: "DevOps Engineer"),
-        (Id: "d12", Name: "Freya Novak", Email: "freya.novak@example.com", Role: "Data Engineer"),
-        (Id: "d13", Name: "Kenji Sato", Email: "kenji.sato@example.com", Role: "Mobile Engineer"),
-        (Id: "d14", Name: "Lucia Blanco", Email: "lucia.blanco@example.com", Role: "Engineering Manager"),
-        (Id: "d15", Name: "Tariq Haddad", Email: "tariq.haddad@example.com", Role: "Security Engineer"),
-        (Id: "d16", Name: "Emma Larsson", Email: "emma.larsson@example.com", Role: "QA Engineer"),
-        (Id: "d17", Name: "Devin Carter", Email: "devin.carter@example.com", Role: "Backend Engineer"),
-        (Id: "d18", Name: "Nina Petrov", Email: "nina.petrov@example.com", Role: "Data Engineer"),
-        (Id: "d19", Name: "Ravi Menon", Email: "ravi.menon@example.com", Role: "Mobile Engineer"),
-        (Id: "d20", Name: "Hannah Weiss", Email: "hannah.weiss@example.com", Role: "Frontend Engineer"),
-        (Id: "d21", Name: "Tomás Silva", Email: "tomas.silva@example.com", Role: "ML Engineer"),
-        (Id: "d22", Name: "Zara Haddad", Email: "zara.haddad@example.com", Role: "DevOps Engineer"),
-        (Id: "d23", Name: "Elena Moreau", Email: "elena.moreau@example.com", Role: "QA Engineer"),
-        (Id: "d24", Name: "Samir Nasser", Email: "samir.nasser@example.com", Role: "Full-Stack Engineer"),
-        (Id: "d25", Name: "Ingrid Sørensen", Email: "ingrid.sorensen@example.com", Role: "Security Engineer"),
-        (Id: "d26", Name: "Petra Klein", Email: "petra.klein@example.com", Role: "Backend Engineer"),
-        (Id: "d27", Name: "Jonas Lindqvist", Email: "jonas.lindqvist@example.com", Role: "Data Engineer"),
-        (Id: "d28", Name: "Amara Okafor", Email: "amara.okafor@example.com", Role: "Frontend Engineer"),
-    };
+    new { id = "o1", name = "Acme Corp" },
+    new { id = "o2", name = "Nimbus Labs" },
+    new { id = "o3", name = "Helix Industries" },
+    new { id = "o4", name = "Beacon Soft" },
+    new { id = "o5", name = "OpenVox" },
+    new { id = "o6", name = "Cobalt Systems" },
+    new { id = "o7", name = "Vertex Robotics" },
+    new { id = "o8", name = "Zephyr Media" },
+    new { id = "o9", name = "Ironclad Logistics" },
+};
 
-    foreach (var row in data)
-    {
-        db.Developers.Add(new Developer { Id = row.Id, Name = row.Name, Email = row.Email, Role = row.Role });
-    }
-}
-
-static void SeedProjects(AppDbContext db)
+public static readonly object[] Developers =
 {
-    var data = new[]
-    {
-        (Id: "p1", Name: "Atlas ERP", Description: "Enterprise resource planning suite for mid-size organisations.", Status: "active"),
-        (Id: "p2", Name: "Nova Analytics Platform", Description: "Self-service BI and analytics over streaming and batch data.", Status: "active"),
-        (Id: "p3", Name: "Pulse Health Monitor", Description: "Real-time patient vitals monitoring with alerting.", Status: "active"),
-        (Id: "p4", Name: "Quantum Commerce", Description: "High-volume e-commerce storefront and checkout platform.", Status: "in_progress"),
-        (Id: "p5", Name: "Sentinel Security Suite", Description: "Vulnerability scanning and threat intelligence platform.", Status: "active"),
-        (Id: "p6", Name: "Orbit Task Scheduler", Description: "Distributed, dependency-aware job scheduler.", Status: "in_progress"),
-        (Id: "p7", Name: "Flux Data Pipeline", Description: "Replayable stream ingestion and enrichment pipeline.", Status: "maintenance"),
-        (Id: "p8", Name: "Helios Chat Platform", Description: "Real-time chat and presence platform with bot integrations.", Status: "planning"),
-        (Id: "p9", Name: "Zenith Mobile Wallet", Description: "Digital wallet with P2P transfers and fraud detection.", Status: "in_progress"),
-        (Id: "p10", Name: "Aurora Data Lake", Description: "Centralised data lake with governed access and lineage.", Status: "active"),
-        (Id: "p11", Name: "Cobalt CI/CD", Description: "Continuous integration and delivery pipelines as a service.", Status: "active"),
-        (Id: "p12", Name: "Vega Fitness Tracker", Description: "Wearable fitness tracking with social challenges.", Status: "planning"),
-        (Id: "p13", Name: "Aegis Identity", Description: "Central identity and access management platform.", Status: "in_progress"),
-        (Id: "p14", Name: "Boreal EDI", Description: "Electronic data interchange gateway for logistics.", Status: "maintenance"),
-        (Id: "p15", Name: "Stratos Edge Mesh", Description: "Edge computing mesh for low-latency IoT workloads.", Status: "in_progress"),
-    };
+    new { id = "d1", name = "Alice Chen", email = "alice.chen@example.com", role = "Backend Engineer" },
+    new { id = "d2", name = "Marcus Johnson", email = "marcus.johnson@example.com", role = "Frontend Engineer" },
+    new { id = "d3", name = "Priya Sharma", email = "priya.sharma@example.com", role = "Full-Stack Engineer" },
+    new { id = "d4", name = "Diego Martinez", email = "diego.martinez@example.com", role = "DevOps Engineer" },
+    new { id = "d5", name = "Emily Watson", email = "emily.watson@example.com", role = "Data Engineer" },
+    new { id = "d6", name = "Omar Farouk", email = "omar.farouk@example.com", role = "ML Engineer" },
+    new { id = "d7", name = "Sofia Rossi", email = "sofia.rossi@example.com", role = "QA Engineer" },
+    new { id = "d8", name = "Liam O'Brien", email = "liam.obrien@example.com", role = "Backend Engineer" },
+    new { id = "d9", name = "Yuki Tanaka", email = "yuki.tanaka@example.com", role = "Frontend Engineer" },
+    new { id = "d10", name = "Aisha Bello", email = "aisha.bello@example.com", role = "Product Engineer" },
+    new { id = "d11", name = "Noah Kim", email = "noah.kim@example.com", role = "DevOps Engineer" },
+    new { id = "d12", name = "Freya Novak", email = "freya.novak@example.com", role = "Data Engineer" },
+    new { id = "d13", name = "Kenji Sato", email = "kenji.sato@example.com", role = "Mobile Engineer" },
+    new { id = "d14", name = "Lucia Blanco", email = "lucia.blanco@example.com", role = "Engineering Manager" },
+    new { id = "d15", name = "Tariq Haddad", email = "tariq.haddad@example.com", role = "Security Engineer" },
+    new { id = "d16", name = "Emma Larsson", email = "emma.larsson@example.com", role = "QA Engineer" },
+    new { id = "d17", name = "Devin Carter", email = "devin.carter@example.com", role = "Backend Engineer" },
+    new { id = "d18", name = "Nina Petrov", email = "nina.petrov@example.com", role = "Data Engineer" },
+    new { id = "d19", name = "Ravi Menon", email = "ravi.menon@example.com", role = "Mobile Engineer" },
+    new { id = "d20", name = "Hannah Weiss", email = "hannah.weiss@example.com", role = "Frontend Engineer" },
+    new { id = "d21", name = "Tomás Silva", email = "tomas.silva@example.com", role = "ML Engineer" },
+    new { id = "d22", name = "Zara Haddad", email = "zara.haddad@example.com", role = "DevOps Engineer" },
+    new { id = "d23", name = "Elena Moreau", email = "elena.moreau@example.com", role = "QA Engineer" },
+    new { id = "d24", name = "Samir Nasser", email = "samir.nasser@example.com", role = "Full-Stack Engineer" },
+    new { id = "d25", name = "Ingrid Sørensen", email = "ingrid.sorensen@example.com", role = "Security Engineer" },
+    new { id = "d26", name = "Petra Klein", email = "petra.klein@example.com", role = "Backend Engineer" },
+    new { id = "d27", name = "Jonas Lindqvist", email = "jonas.lindqvist@example.com", role = "Data Engineer" },
+    new { id = "d28", name = "Amara Okafor", email = "amara.okafor@example.com", role = "Frontend Engineer" },
+};
 
-    foreach (var row in data)
-    {
-        db.Projects.Add(new Project { Id = row.Id, Name = row.Name, Description = row.Description, Status = row.Status });
-    }
-}
-
-static void SeedTechnologies(AppDbContext db)
+public static readonly object[] Projects =
 {
-    var data = new[]
-    {
-        (Id: "t01", Name: ".NET / C#", Category: "Backend"),
-        (Id: "t02", Name: "Java", Category: "Backend"),
-        (Id: "t03", Name: "Python", Category: "Backend"),
-        (Id: "t04", Name: "Go", Category: "Backend"),
-        (Id: "t05", Name: "TypeScript", Category: "Frontend"),
-        (Id: "t06", Name: "React", Category: "Frontend"),
-        (Id: "t07", Name: "Angular", Category: "Frontend"),
-        (Id: "t08", Name: "Node.js", Category: "Backend"),
-        (Id: "t09", Name: "PostgreSQL", Category: "Database"),
-        (Id: "t10", Name: "MongoDB", Category: "Database"),
-        (Id: "t11", Name: "Neo4j", Category: "Database"),
-        (Id: "t12", Name: "Redis", Category: "Infrastructure"),
-        (Id: "t13", Name: "Docker", Category: "DevOps"),
-        (Id: "t14", Name: "Kubernetes", Category: "DevOps"),
-        (Id: "t15", Name: "AWS", Category: "Cloud"),
-        (Id: "t16", Name: "Azure", Category: "Cloud"),
-        (Id: "t17", Name: "TensorFlow", Category: "ML"),
-        (Id: "t18", Name: "GraphQL", Category: "API"),
-        (Id: "t19", Name: "Apache Kafka", Category: "Streaming"),
-        (Id: "t20", Name: "Apache Spark", Category: "Big Data"),
-        (Id: "t21", Name: "RabbitMQ", Category: "Infrastructure"),
-        (Id: "t22", Name: "Flink", Category: "Streaming"),
-        (Id: "t23", Name: "PyTorch", Category: "ML"),
-        (Id: "t24", Name: "gRPC", Category: "API"),
-        (Id: "t25", Name: "Cassandra", Category: "Database"),
-        (Id: "t26", Name: "Rust", Category: "Backend"),
-    };
+    new { id = "p1", name = "Atlas ERP", description = "Enterprise resource planning suite for mid-size organisations.", status = "active" },
+    new { id = "p2", name = "Nova Analytics Platform", description = "Self-service BI and analytics over streaming and batch data.", status = "active" },
+    new { id = "p3", name = "Pulse Health Monitor", description = "Real-time patient vitals monitoring with alerting.", status = "active" },
+    new { id = "p4", name = "Quantum Commerce", description = "High-volume e-commerce storefront and checkout platform.", status = "in_progress" },
+    new { id = "p5", name = "Sentinel Security Suite", description = "Vulnerability scanning and threat intelligence platform.", status = "active" },
+    new { id = "p6", name = "Orbit Task Scheduler", description = "Distributed, dependency-aware job scheduler.", status = "in_progress" },
+    new { id = "p7", name = "Flux Data Pipeline", description = "Replayable stream ingestion and enrichment pipeline.", status = "maintenance" },
+    new { id = "p8", name = "Helios Chat Platform", description = "Real-time chat and presence platform with bot integrations.", status = "planning" },
+    new { id = "p9", name = "Zenith Mobile Wallet", description = "Digital wallet with P2P transfers and fraud detection.", status = "in_progress" },
+    new { id = "p10", name = "Aurora Data Lake", description = "Centralised data lake with governed access and lineage.", status = "active" },
+    new { id = "p11", name = "Cobalt CI/CD", description = "Continuous integration and delivery pipelines as a service.", status = "active" },
+    new { id = "p12", name = "Vega Fitness Tracker", description = "Wearable fitness tracking with social challenges.", status = "planning" },
+    new { id = "p13", name = "Aegis Identity", description = "Central identity and access management platform.", status = "in_progress" },
+    new { id = "p14", name = "Boreal EDI", description = "Electronic data interchange gateway for logistics.", status = "maintenance" },
+    new { id = "p15", name = "Stratos Edge Mesh", description = "Edge computing mesh for low-latency IoT workloads.", status = "in_progress" },
+};
 
-    foreach (var row in data)
-    {
-        db.Technologies.Add(new Technology { Id = row.Id, Name = row.Name, Category = row.Category });
-    }
-}
-
-static void SeedRepositories(AppDbContext db)
+public static readonly object[] Technologies =
 {
-    var data = new[]
-    {
-        (Id: "r01", Name: "atlas-api", Url: "https://github.com/acme/atlas-api", ProjectId: "p1"),
-        (Id: "r02", Name: "atlas-web", Url: "https://github.com/acme/atlas-web", ProjectId: "p1"),
-        (Id: "r03", Name: "atlas-infra", Url: "https://github.com/acme/atlas-infra", ProjectId: "p1"),
-        (Id: "r04", Name: "nova-query-engine", Url: "https://github.com/acme/nova-query-engine", ProjectId: "p2"),
-        (Id: "r05", Name: "nova-dashboard", Url: "https://github.com/acme/nova-dashboard", ProjectId: "p2"),
-        (Id: "r06", Name: "pulse-backend", Url: "https://github.com/beacon/pulse-backend", ProjectId: "p3"),
-        (Id: "r07", Name: "pulse-mobile", Url: "https://github.com/beacon/pulse-mobile", ProjectId: "p3"),
-        (Id: "r08", Name: "quantum-storefront", Url: "https://github.com/nimbus/quantum-storefront", ProjectId: "p4"),
-        (Id: "r09", Name: "quantum-checkout", Url: "https://github.com/nimbus/quantum-checkout", ProjectId: "p4"),
-        (Id: "r10", Name: "sentinel-scanner", Url: "https://github.com/openvox/sentinel-scanner", ProjectId: "p5"),
-        (Id: "r11", Name: "orbit-scheduler", Url: "https://github.com/helix/orbit-scheduler", ProjectId: "p6"),
-        (Id: "r12", Name: "flux-pipeline", Url: "https://github.com/acme/flux-pipeline", ProjectId: "p7"),
-        (Id: "r13", Name: "helios-gateway", Url: "https://github.com/beacon/helios-gateway", ProjectId: "p8"),
-        (Id: "r14", Name: "zenith-wallet-app", Url: "https://github.com/nimbus/zenith-wallet-app", ProjectId: "p9"),
-        (Id: "r15", Name: "aurora-lake", Url: "https://github.com/cobalt/aurora-lake", ProjectId: "p10"),
-        (Id: "r16", Name: "cobalt-cicd", Url: "https://github.com/cobalt/cobalt-cicd", ProjectId: "p11"),
-        (Id: "r17", Name: "vega-tracker-app", Url: "https://github.com/vertex/vega-tracker-app", ProjectId: "p12"),
-        (Id: "r18", Name: "aegis-idp", Url: "https://github.com/openvox/aegis-idp", ProjectId: "p13"),
-        (Id: "r19", Name: "boreal-edi-gateway", Url: "https://github.com/ironclad/boreal-edi-gateway", ProjectId: "p14"),
-        (Id: "r20", Name: "stratos-edge-mesh", Url: "https://github.com/vertex/stratos-edge-mesh", ProjectId: "p15"),
-        (Id: "r21", Name: "zephyr-media-api", Url: "https://github.com/zephyr/zephyr-media-api", ProjectId: "p12"),
-        (Id: "r22", Name: "cobalt-observability", Url: "https://github.com/cobalt/cobalt-observability", ProjectId: "p11"),
-    };
+    new { id = "t01", name = ".NET / C#", category = "Backend" },
+    new { id = "t02", name = "Java", category = "Backend" },
+    new { id = "t03", name = "Python", category = "Backend" },
+    new { id = "t04", name = "Go", category = "Backend" },
+    new { id = "t05", name = "TypeScript", category = "Frontend" },
+    new { id = "t06", name = "React", category = "Frontend" },
+    new { id = "t07", name = "Angular", category = "Frontend" },
+    new { id = "t08", name = "Node.js", category = "Backend" },
+    new { id = "t09", name = "PostgreSQL", category = "Database" },
+    new { id = "t10", name = "MongoDB", category = "Database" },
+    new { id = "t11", name = "Neo4j", category = "Database" },
+    new { id = "t12", name = "Redis", category = "Infrastructure" },
+    new { id = "t13", name = "Docker", category = "DevOps" },
+    new { id = "t14", name = "Kubernetes", category = "DevOps" },
+    new { id = "t15", name = "AWS", category = "Cloud" },
+    new { id = "t16", name = "Azure", category = "Cloud" },
+    new { id = "t17", name = "TensorFlow", category = "ML" },
+    new { id = "t18", name = "GraphQL", category = "API" },
+    new { id = "t19", name = "Apache Kafka", category = "Streaming" },
+    new { id = "t20", name = "Apache Spark", category = "Big Data" },
+    new { id = "t21", name = "RabbitMQ", category = "Infrastructure" },
+    new { id = "t22", name = "Flink", category = "Streaming" },
+    new { id = "t23", name = "PyTorch", category = "ML" },
+    new { id = "t24", name = "gRPC", category = "API" },
+    new { id = "t25", name = "Cassandra", category = "Database" },
+    new { id = "t26", name = "Rust", category = "Backend" },
+};
 
-    foreach (var row in data)
-    {
-        db.Repositories.Add(new Repository { Id = row.Id, Name = row.Name, Url = row.Url, ProjectId = row.ProjectId });
-    }
-}
-
-static void SeedTasks(AppDbContext db)
+public static readonly object[] Repositories =
 {
-    var data = new[]
-    {
-        (Id: "sk1", Title: "Build inventory ledger API", Status: "done", Priority: 1, ProjectId: "p1"),
-        (Id: "sk2", Title: "Implement OAuth2 SSO", Status: "in_progress", Priority: 2, ProjectId: "p1"),
-        (Id: "sk3", Title: "Migrate customer records", Status: "todo", Priority: 3, ProjectId: "p1"),
-        (Id: "sk4", Title: "Add reporting endpoints", Status: "backlog", Priority: 4, ProjectId: "p1"),
-        (Id: "sk5", Title: "Design query engine DSL", Status: "done", Priority: 1, ProjectId: "p2"),
-        (Id: "sk6", Title: "Build dashboard widgets", Status: "in_progress", Priority: 2, ProjectId: "p2"),
-        (Id: "sk7", Title: "Connect streaming ingestion", Status: "todo", Priority: 2, ProjectId: "p2"),
-        (Id: "sk8", Title: "Alerting rules engine", Status: "backlog", Priority: 3, ProjectId: "p2"),
-        (Id: "sk9", Title: "Implement vitals ingestion", Status: "done", Priority: 1, ProjectId: "p3"),
-        (Id: "sk10", Title: "Build alerting pipeline", Status: "in_progress", Priority: 2, ProjectId: "p3"),
-        (Id: "sk11", Title: "Mobile push notifications", Status: "todo", Priority: 3, ProjectId: "p3"),
-        (Id: "sk12", Title: "Cart checkout flow", Status: "in_progress", Priority: 1, ProjectId: "p4"),
-        (Id: "sk13", Title: "Payment gateway integration", Status: "todo", Priority: 1, ProjectId: "p4"),
-        (Id: "sk14", Title: "Product catalog search", Status: "done", Priority: 2, ProjectId: "p4"),
-        (Id: "sk15", Title: "Build vulnerability scanner", Status: "done", Priority: 1, ProjectId: "p5"),
-        (Id: "sk16", Title: "Connect threat intel feed", Status: "in_progress", Priority: 2, ProjectId: "p5"),
-        (Id: "sk17", Title: "Generate compliance reports", Status: "todo", Priority: 3, ProjectId: "p5"),
-        (Id: "sk18", Title: "Scheduler core loop", Status: "in_progress", Priority: 1, ProjectId: "p6"),
-        (Id: "sk19", Title: "Retry policy engine", Status: "todo", Priority: 2, ProjectId: "p6"),
-        (Id: "sk20", Title: "Service integration hooks", Status: "backlog", Priority: 3, ProjectId: "p6"),
-        (Id: "sk21", Title: "Audit log exporter", Status: "backlog", Priority: 4, ProjectId: "p6"),
-        (Id: "sk22", Title: "Replayable pipeline stages", Status: "done", Priority: 1, ProjectId: "p7"),
-        (Id: "sk23", Title: "Schema registry", Status: "in_progress", Priority: 2, ProjectId: "p7"),
-        (Id: "sk24", Title: "Dead letter queue", Status: "todo", Priority: 3, ProjectId: "p7"),
-        (Id: "sk25", Title: "Chat message routing", Status: "todo", Priority: 1, ProjectId: "p8"),
-        (Id: "sk26", Title: "Real-time presence", Status: "backlog", Priority: 2, ProjectId: "p8"),
-        (Id: "sk27", Title: "Bot framework integration", Status: "backlog", Priority: 3, ProjectId: "p8"),
-        (Id: "sk28", Title: "Wallet balance cache", Status: "in_progress", Priority: 1, ProjectId: "p9"),
-        (Id: "sk29", Title: "P2P transfers", Status: "todo", Priority: 1, ProjectId: "p9"),
-        (Id: "sk30", Title: "KYC verification", Status: "todo", Priority: 2, ProjectId: "p9"),
-        (Id: "sk31", Title: "Fraud detection rules", Status: "backlog", Priority: 3, ProjectId: "p9"),
-        (Id: "sk32", Title: "Lake ingestion pipelines", Status: "in_progress", Priority: 1, ProjectId: "p10"),
-        (Id: "sk33", Title: "Columnar tables & partitioning", Status: "todo", Priority: 2, ProjectId: "p10"),
-        (Id: "sk34", Title: "Data lineage catalog", Status: "backlog", Priority: 3, ProjectId: "p10"),
-        (Id: "sk35", Title: "Pipeline orchestrator service", Status: "in_progress", Priority: 1, ProjectId: "p11"),
-        (Id: "sk36", Title: "Artifact registry", Status: "todo", Priority: 2, ProjectId: "p11"),
-        (Id: "sk37", Title: "Observability dashboards", Status: "done", Priority: 3, ProjectId: "p11"),
-        (Id: "sk38", Title: "Sensor data ingestion", Status: "todo", Priority: 1, ProjectId: "p12"),
-        (Id: "sk39", Title: "Activity rings UI", Status: "backlog", Priority: 2, ProjectId: "p12"),
-        (Id: "sk40", Title: "SSO integration", Status: "in_progress", Priority: 1, ProjectId: "p13"),
-        (Id: "sk41", Title: "MFA enforcement", Status: "todo", Priority: 1, ProjectId: "p13"),
-        (Id: "sk42", Title: "Role-based access controls", Status: "done", Priority: 2, ProjectId: "p13"),
-        (Id: "sk43", Title: "EDI message transformation", Status: "done", Priority: 1, ProjectId: "p14"),
-        (Id: "sk44", Title: "Partner onboarding API", Status: "in_progress", Priority: 2, ProjectId: "p14"),
-        (Id: "sk45", Title: "Edge node deployment", Status: "todo", Priority: 1, ProjectId: "p15"),
-        (Id: "sk46", Title: "Low-latency sync protocol", Status: "backlog", Priority: 2, ProjectId: "p15"),
-    };
+    new { id = "r01", name = "atlas-api", url = "https://github.com/acme/atlas-api", projectId = "p1" },
+    new { id = "r02", name = "atlas-web", url = "https://github.com/acme/atlas-web", projectId = "p1" },
+    new { id = "r03", name = "atlas-infra", url = "https://github.com/acme/atlas-infra", projectId = "p1" },
+    new { id = "r04", name = "nova-query-engine", url = "https://github.com/acme/nova-query-engine", projectId = "p2" },
+    new { id = "r05", name = "nova-dashboard", url = "https://github.com/acme/nova-dashboard", projectId = "p2" },
+    new { id = "r06", name = "pulse-backend", url = "https://github.com/beacon/pulse-backend", projectId = "p3" },
+    new { id = "r07", name = "pulse-mobile", url = "https://github.com/beacon/pulse-mobile", projectId = "p3" },
+    new { id = "r08", name = "quantum-storefront", url = "https://github.com/nimbus/quantum-storefront", projectId = "p4" },
+    new { id = "r09", name = "quantum-checkout", url = "https://github.com/nimbus/quantum-checkout", projectId = "p4" },
+    new { id = "r10", name = "sentinel-scanner", url = "https://github.com/openvox/sentinel-scanner", projectId = "p5" },
+    new { id = "r11", name = "orbit-scheduler", url = "https://github.com/helix/orbit-scheduler", projectId = "p6" },
+    new { id = "r12", name = "flux-pipeline", url = "https://github.com/acme/flux-pipeline", projectId = "p7" },
+    new { id = "r13", name = "helios-gateway", url = "https://github.com/beacon/helios-gateway", projectId = "p8" },
+    new { id = "r14", name = "zenith-wallet-app", url = "https://github.com/nimbus/zenith-wallet-app", projectId = "p9" },
+    new { id = "r15", name = "aurora-lake", url = "https://github.com/cobalt/aurora-lake", projectId = "p10" },
+    new { id = "r16", name = "cobalt-cicd", url = "https://github.com/cobalt/cobalt-cicd", projectId = "p11" },
+    new { id = "r17", name = "vega-tracker-app", url = "https://github.com/vertex/vega-tracker-app", projectId = "p12" },
+    new { id = "r18", name = "aegis-idp", url = "https://github.com/openvox/aegis-idp", projectId = "p13" },
+    new { id = "r19", name = "boreal-edi-gateway", url = "https://github.com/ironclad/boreal-edi-gateway", projectId = "p14" },
+    new { id = "r20", name = "stratos-edge-mesh", url = "https://github.com/vertex/stratos-edge-mesh", projectId = "p15" },
+    new { id = "r21", name = "zephyr-media-api", url = "https://github.com/zephyr/zephyr-media-api", projectId = "p12" },
+    new { id = "r22", name = "cobalt-observability", url = "https://github.com/cobalt/cobalt-observability", projectId = "p11" },
+};
 
-    foreach (var row in data)
-    {
-        db.Tasks.Add(new WorkTask { Id = row.Id, Title = row.Title, Status = row.Status, Priority = row.Priority, ProjectId = row.ProjectId });
-    }
-}
-
-static void SeedWorksFor(AppDbContext db)
+public static readonly object[] Tasks =
 {
-    var data = new[]
-    {
-        ("d1", "o1"), ("d2", "o1"), ("d5", "o1"), ("d9", "o1"), ("d14", "o1"),
-        ("d3", "o2"), ("d10", "o2"), ("d13", "o2"),
-        ("d4", "o3"), ("d8", "o3"), ("d11", "o3"),
-        ("d6", "o4"), ("d12", "o4"), ("d16", "o4"),
-        ("d7", "o5"), ("d15", "o5"),
-        ("d17", "o6"), ("d20", "o6"), ("d24", "o6"), ("d28", "o6"),
-        ("d18", "o7"), ("d19", "o7"), ("d21", "o7"),
-        ("d22", "o8"), ("d23", "o8"),
-        ("d25", "o9"), ("d26", "o9"), ("d27", "o9"),
-    };
+    new { id = "sk1", title = "Build inventory ledger API", status = "done", priority = 1, projectId = "p1" },
+    new { id = "sk2", title = "Implement OAuth2 SSO", status = "in_progress", priority = 2, projectId = "p1" },
+    new { id = "sk3", title = "Migrate customer records", status = "todo", priority = 3, projectId = "p1" },
+    new { id = "sk4", title = "Add reporting endpoints", status = "backlog", priority = 4, projectId = "p1" },
+    new { id = "sk5", title = "Design query engine DSL", status = "done", priority = 1, projectId = "p2" },
+    new { id = "sk6", title = "Build dashboard widgets", status = "in_progress", priority = 2, projectId = "p2" },
+    new { id = "sk7", title = "Connect streaming ingestion", status = "todo", priority = 2, projectId = "p2" },
+    new { id = "sk8", title = "Alerting rules engine", status = "backlog", priority = 3, projectId = "p2" },
+    new { id = "sk9", title = "Implement vitals ingestion", status = "done", priority = 1, projectId = "p3" },
+    new { id = "sk10", title = "Build alerting pipeline", status = "in_progress", priority = 2, projectId = "p3" },
+    new { id = "sk11", title = "Mobile push notifications", status = "todo", priority = 3, projectId = "p3" },
+    new { id = "sk12", title = "Cart checkout flow", status = "in_progress", priority = 1, projectId = "p4" },
+    new { id = "sk13", title = "Payment gateway integration", status = "todo", priority = 1, projectId = "p4" },
+    new { id = "sk14", title = "Product catalog search", status = "done", priority = 2, projectId = "p4" },
+    new { id = "sk15", title = "Build vulnerability scanner", status = "done", priority = 1, projectId = "p5" },
+    new { id = "sk16", title = "Connect threat intel feed", status = "in_progress", priority = 2, projectId = "p5" },
+    new { id = "sk17", title = "Generate compliance reports", status = "todo", priority = 3, projectId = "p5" },
+    new { id = "sk18", title = "Scheduler core loop", status = "in_progress", priority = 1, projectId = "p6" },
+    new { id = "sk19", title = "Retry policy engine", status = "todo", priority = 2, projectId = "p6" },
+    new { id = "sk20", title = "Service integration hooks", status = "backlog", priority = 3, projectId = "p6" },
+    new { id = "sk21", title = "Audit log exporter", status = "backlog", priority = 4, projectId = "p6" },
+    new { id = "sk22", title = "Replayable pipeline stages", status = "done", priority = 1, projectId = "p7" },
+    new { id = "sk23", title = "Schema registry", status = "in_progress", priority = 2, projectId = "p7" },
+    new { id = "sk24", title = "Dead letter queue", status = "todo", priority = 3, projectId = "p7" },
+    new { id = "sk25", title = "Chat message routing", status = "todo", priority = 1, projectId = "p8" },
+    new { id = "sk26", title = "Real-time presence", status = "backlog", priority = 2, projectId = "p8" },
+    new { id = "sk27", title = "Bot framework integration", status = "backlog", priority = 3, projectId = "p8" },
+    new { id = "sk28", title = "Wallet balance cache", status = "in_progress", priority = 1, projectId = "p9" },
+    new { id = "sk29", title = "P2P transfers", status = "todo", priority = 1, projectId = "p9" },
+    new { id = "sk30", title = "KYC verification", status = "todo", priority = 2, projectId = "p9" },
+    new { id = "sk31", title = "Fraud detection rules", status = "backlog", priority = 3, projectId = "p9" },
+    new { id = "sk32", title = "Lake ingestion pipelines", status = "in_progress", priority = 1, projectId = "p10" },
+    new { id = "sk33", title = "Columnar tables & partitioning", status = "todo", priority = 2, projectId = "p10" },
+    new { id = "sk34", title = "Data lineage catalog", status = "backlog", priority = 3, projectId = "p10" },
+    new { id = "sk35", title = "Pipeline orchestrator service", status = "in_progress", priority = 1, projectId = "p11" },
+    new { id = "sk36", title = "Artifact registry", status = "todo", priority = 2, projectId = "p11" },
+    new { id = "sk37", title = "Observability dashboards", status = "done", priority = 3, projectId = "p11" },
+    new { id = "sk38", title = "Sensor data ingestion", status = "todo", priority = 1, projectId = "p12" },
+    new { id = "sk39", title = "Activity rings UI", status = "backlog", priority = 2, projectId = "p12" },
+    new { id = "sk40", title = "SSO integration", status = "in_progress", priority = 1, projectId = "p13" },
+    new { id = "sk41", title = "MFA enforcement", status = "todo", priority = 1, projectId = "p13" },
+    new { id = "sk42", title = "Role-based access controls", status = "done", priority = 2, projectId = "p13" },
+    new { id = "sk43", title = "EDI message transformation", status = "done", priority = 1, projectId = "p14" },
+    new { id = "sk44", title = "Partner onboarding API", status = "in_progress", priority = 2, projectId = "p14" },
+    new { id = "sk45", title = "Edge node deployment", status = "todo", priority = 1, projectId = "p15" },
+    new { id = "sk46", title = "Low-latency sync protocol", status = "backlog", priority = 2, projectId = "p15" },
+};
 
-    foreach (var (developerId, organizationId) in data)
-    {
-        db.WorksForRelations.Add(new WorksForEdge { DeveloperId = developerId, OrganizationId = organizationId, Since = "2020" });
-    }
-}
-
-static void SeedOwns(AppDbContext db)
+public static readonly object[] WorksFor =
 {
-    var data = new[]
-    {
-        ("o1", "p1"), ("o1", "p2"), ("o1", "p7"),
-        ("o2", "p4"), ("o2", "p9"),
-        ("o3", "p6"),
-        ("o4", "p3"), ("o4", "p8"),
-        ("o5", "p5"), ("o5", "p13"),
-        ("o6", "p10"), ("o6", "p11"),
-        ("o7", "p12"), ("o7", "p15"),
-        ("o8", "p12"),
-        ("o9", "p14"),
-    };
+    new { developerId = "d1", organizationId = "o1", since = "2020" }, new { developerId = "d2", organizationId = "o1", since = "2020" },
+    new { developerId = "d5", organizationId = "o1", since = "2020" }, new { developerId = "d9", organizationId = "o1", since = "2020" },
+    new { developerId = "d14", organizationId = "o1", since = "2020" }, new { developerId = "d3", organizationId = "o2", since = "2020" },
+    new { developerId = "d10", organizationId = "o2", since = "2020" }, new { developerId = "d13", organizationId = "o2", since = "2020" },
+    new { developerId = "d4", organizationId = "o3", since = "2020" }, new { developerId = "d8", organizationId = "o3", since = "2020" },
+    new { developerId = "d11", organizationId = "o3", since = "2020" }, new { developerId = "d6", organizationId = "o4", since = "2020" },
+    new { developerId = "d12", organizationId = "o4", since = "2020" }, new { developerId = "d16", organizationId = "o4", since = "2020" },
+    new { developerId = "d7", organizationId = "o5", since = "2020" }, new { developerId = "d15", organizationId = "o5", since = "2020" },
+    new { developerId = "d17", organizationId = "o6", since = "2020" }, new { developerId = "d20", organizationId = "o6", since = "2020" },
+    new { developerId = "d24", organizationId = "o6", since = "2020" }, new { developerId = "d28", organizationId = "o6", since = "2020" },
+    new { developerId = "d18", organizationId = "o7", since = "2020" }, new { developerId = "d19", organizationId = "o7", since = "2020" },
+    new { developerId = "d21", organizationId = "o7", since = "2020" }, new { developerId = "d22", organizationId = "o8", since = "2020" },
+    new { developerId = "d23", organizationId = "o8", since = "2020" }, new { developerId = "d25", organizationId = "o9", since = "2020" },
+    new { developerId = "d26", organizationId = "o9", since = "2020" }, new { developerId = "d27", organizationId = "o9", since = "2020" },
+};
 
-    foreach (var (organizationId, projectId) in data)
-    {
-        db.OwnsRelations.Add(new OwnsEdge { OrganizationId = organizationId, ProjectId = projectId });
-    }
-}
-
-static void SeedWorksOn(AppDbContext db)
+public static readonly object[] Owns =
 {
-    var data = new[]
-    {
-        ("d1", "p1", "Lead", "2021"), ("d1", "p6", "Contributor", "2023"),
-        ("d2", "p2", "Lead", "2022"), ("d2", "p8", "Contributor", "2024"),
-        ("d3", "p4", "Lead", "2023"), ("d3", "p1", "Contributor", "2021"),
-        ("d4", "p1", "Infra", "2021"), ("d4", "p5", "Member", "2022"),
-        ("d5", "p2", "Lead", "2022"), ("d5", "p7", "Contributor", "2020"),
-        ("d6", "p3", "Lead", "2022"), ("d6", "p8", "Contributor", "2024"),
-        ("d7", "p1", "QA", "2021"), ("d7", "p4", "QA", "2023"),
-        ("d8", "p6", "Lead", "2023"), ("d8", "p5", "Contributor", "2022"),
-        ("d9", "p8", "Lead", "2024"), ("d9", "p2", "Contributor", "2022"),
-        ("d10", "p4", "Product", "2023"), ("d10", "p9", "Lead", "2024"),
-        ("d11", "p5", "DevOps", "2022"), ("d11", "p2", "Contributor", "2023"),
-        ("d12", "p7", "Lead", "2020"), ("d12", "p9", "Contributor", "2024"),
-        ("d13", "p9", "Mobile", "2024"), ("d13", "p3", "Contributor", "2022"),
-        ("d14", "p1", "Manager", "2021"), ("d14", "p3", "Manager", "2022"),
-        ("d15", "p5", "Security", "2022"), ("d15", "p1", "Consultant", "2021"),
-        ("d16", "p5", "QA", "2022"), ("d16", "p9", "QA", "2024"),
-        ("d17", "p1", "Contributor", "2022"), ("d17", "p11", "Lead", "2023"),
-        ("d18", "p10", "Lead", "2023"), ("d18", "p7", "Contributor", "2020"),
-        ("d19", "p12", "Mobile", "2024"), ("d19", "p9", "Contributor", "2024"),
-        ("d20", "p8", "Contributor", "2024"), ("d20", "p12", "Frontend", "2024"),
-        ("d21", "p2", "ML", "2023"), ("d21", "p10", "Contributor", "2023"),
-        ("d22", "p13", "DevOps", "2023"), ("d22", "p11", "Contributor", "2023"),
-        ("d23", "p13", "QA", "2023"), ("d23", "p15", "QA", "2024"),
-        ("d24", "p14", "Lead", "2022"), ("d24", "p1", "Contributor", "2022"),
-        ("d25", "p13", "Security", "2023"), ("d25", "p5", "Consultant", "2023"),
-        ("d26", "p15", "Lead", "2024"), ("d26", "p13", "Contributor", "2023"),
-        ("d27", "p10", "Data", "2023"), ("d27", "p14", "Contributor", "2024"),
-        ("d28", "p11", "Frontend", "2023"), ("d28", "p15", "Contributor", "2024"),
-    };
+    new { organizationId = "o1", projectId = "p1" }, new { organizationId = "o1", projectId = "p2" }, new { organizationId = "o1", projectId = "p7" },
+    new { organizationId = "o2", projectId = "p4" }, new { organizationId = "o2", projectId = "p9" },
+    new { organizationId = "o3", projectId = "p6" },
+    new { organizationId = "o4", projectId = "p3" }, new { organizationId = "o4", projectId = "p8" },
+    new { organizationId = "o5", projectId = "p5" }, new { organizationId = "o5", projectId = "p13" },
+    new { organizationId = "o6", projectId = "p10" }, new { organizationId = "o6", projectId = "p11" },
+    new { organizationId = "o7", projectId = "p12" }, new { organizationId = "o7", projectId = "p15" },
+    new { organizationId = "o8", projectId = "p12" },
+    new { organizationId = "o9", projectId = "p14" },
+};
 
-    foreach (var (developerId, projectId, role, since) in data)
-    {
-        db.WorksOnRelations.Add(new WorksOnEdge { DeveloperId = developerId, ProjectId = projectId, Role = role, Since = since });
-    }
-}
-
-static void SeedUses(AppDbContext db)
+public static readonly object[] WorksOn =
 {
-    var data = new[]
-    {
-        ("p1", "t01", "build"), ("p1", "t05", "frontend"), ("p1", "t09", "data"), ("p1", "t13", "deployment"),
-        ("p2", "t03", "processing"), ("p2", "t19", "streaming"), ("p2", "t20", "batch"), ("p2", "t05", "frontend"),
-        ("p3", "t08", "runtime"), ("p3", "t10", "storage"), ("p3", "t12", "caching"), ("p3", "t17", "prediction"),
-        ("p4", "t01", "build"), ("p4", "t06", "frontend"), ("p4", "t09", "data"), ("p4", "t12", "caching"),
-        ("p5", "t02", "build"), ("p5", "t04", "scanner"), ("p5", "t16", "cloud"),
-        ("p6", "t08", "runtime"), ("p6", "t11", "dependencies"), ("p6", "t12", "queueing"),
-        ("p7", "t03", "processing"), ("p7", "t19", "streaming"), ("p7", "t20", "batch"), ("p7", "t15", "cloud"),
-        ("p8", "t05", "build"), ("p8", "t08", "runtime"), ("p8", "t11", "presence"), ("p8", "t18", "api"),
-        ("p9", "t04", "api"), ("p9", "t03", "services"), ("p9", "t14", "infrastructure"), ("p9", "t15", "cloud"),
-        ("p1", "t24", "api"), ("p3", "t21", "messaging"), ("p4", "t15", "cloud"), ("p5", "t25", "data"),
-        ("p6", "t21", "queueing"), ("p8", "t24", "api"),
-        ("p10", "t20", "batch"), ("p10", "t22", "streaming"), ("p10", "t25", "storage"), ("p10", "t15", "cloud"),
-        ("p11", "t13", "containers"), ("p11", "t14", "orchestration"), ("p11", "t01", "build"), ("p11", "t05", "frontend"),
-        ("p12", "t08", "runtime"), ("p12", "t06", "frontend"), ("p12", "t10", "storage"), ("p12", "t23", "prediction"),
-        ("p13", "t05", "frontend"), ("p13", "t01", "services"), ("p13", "t12", "sessions"), ("p13", "t18", "api"),
-        ("p14", "t02", "gateway"), ("p14", "t21", "messaging"), ("p14", "t09", "storage"), ("p14", "t15", "cloud"),
-        ("p15", "t26", "runtime"), ("p15", "t24", "mesh"), ("p15", "t13", "deployment"), ("p15", "t16", "cloud"),
-    };
+    new { developerId = "d1", projectId = "p1", role = "Lead", since = "2021" }, new { developerId = "d1", projectId = "p6", role = "Contributor", since = "2023" },
+    new { developerId = "d2", projectId = "p2", role = "Lead", since = "2022" }, new { developerId = "d2", projectId = "p8", role = "Contributor", since = "2024" },
+    new { developerId = "d3", projectId = "p4", role = "Lead", since = "2023" }, new { developerId = "d3", projectId = "p1", role = "Contributor", since = "2021" },
+    new { developerId = "d4", projectId = "p1", role = "Infra", since = "2021" }, new { developerId = "d4", projectId = "p5", role = "Member", since = "2022" },
+    new { developerId = "d5", projectId = "p2", role = "Lead", since = "2022" }, new { developerId = "d5", projectId = "p7", role = "Contributor", since = "2020" },
+    new { developerId = "d6", projectId = "p3", role = "Lead", since = "2022" }, new { developerId = "d6", projectId = "p8", role = "Contributor", since = "2024" },
+    new { developerId = "d7", projectId = "p1", role = "QA", since = "2021" }, new { developerId = "d7", projectId = "p4", role = "QA", since = "2023" },
+    new { developerId = "d8", projectId = "p6", role = "Lead", since = "2023" }, new { developerId = "d8", projectId = "p5", role = "Contributor", since = "2022" },
+    new { developerId = "d9", projectId = "p8", role = "Lead", since = "2024" }, new { developerId = "d9", projectId = "p2", role = "Contributor", since = "2022" },
+    new { developerId = "d10", projectId = "p4", role = "Product", since = "2023" }, new { developerId = "d10", projectId = "p9", role = "Lead", since = "2024" },
+    new { developerId = "d11", projectId = "p5", role = "DevOps", since = "2022" }, new { developerId = "d11", projectId = "p2", role = "Contributor", since = "2023" },
+    new { developerId = "d12", projectId = "p7", role = "Lead", since = "2020" }, new { developerId = "d12", projectId = "p9", role = "Contributor", since = "2024" },
+    new { developerId = "d13", projectId = "p9", role = "Mobile", since = "2024" }, new { developerId = "d13", projectId = "p3", role = "Contributor", since = "2022" },
+    new { developerId = "d14", projectId = "p1", role = "Manager", since = "2021" }, new { developerId = "d14", projectId = "p3", role = "Manager", since = "2022" },
+    new { developerId = "d15", projectId = "p5", role = "Security", since = "2022" }, new { developerId = "d15", projectId = "p1", role = "Consultant", since = "2021" },
+    new { developerId = "d16", projectId = "p5", role = "QA", since = "2022" }, new { developerId = "d16", projectId = "p9", role = "QA", since = "2024" },
+    new { developerId = "d17", projectId = "p1", role = "Contributor", since = "2022" }, new { developerId = "d17", projectId = "p11", role = "Lead", since = "2023" },
+    new { developerId = "d18", projectId = "p10", role = "Lead", since = "2023" }, new { developerId = "d18", projectId = "p7", role = "Contributor", since = "2020" },
+    new { developerId = "d19", projectId = "p12", role = "Mobile", since = "2024" }, new { developerId = "d19", projectId = "p9", role = "Contributor", since = "2024" },
+    new { developerId = "d20", projectId = "p8", role = "Contributor", since = "2024" }, new { developerId = "d20", projectId = "p12", role = "Frontend", since = "2024" },
+    new { developerId = "d21", projectId = "p2", role = "ML", since = "2023" }, new { developerId = "d21", projectId = "p10", role = "Contributor", since = "2023" },
+    new { developerId = "d22", projectId = "p13", role = "DevOps", since = "2023" }, new { developerId = "d22", projectId = "p11", role = "Contributor", since = "2023" },
+    new { developerId = "d23", projectId = "p13", role = "QA", since = "2023" }, new { developerId = "d23", projectId = "p15", role = "QA", since = "2024" },
+    new { developerId = "d24", projectId = "p14", role = "Lead", since = "2022" }, new { developerId = "d24", projectId = "p1", role = "Contributor", since = "2022" },
+    new { developerId = "d25", projectId = "p13", role = "Security", since = "2023" }, new { developerId = "d25", projectId = "p5", role = "Consultant", since = "2023" },
+    new { developerId = "d26", projectId = "p15", role = "Lead", since = "2024" }, new { developerId = "d26", projectId = "p13", role = "Contributor", since = "2023" },
+    new { developerId = "d27", projectId = "p10", role = "Data", since = "2023" }, new { developerId = "d27", projectId = "p14", role = "Contributor", since = "2024" },
+    new { developerId = "d28", projectId = "p11", role = "Frontend", since = "2023" }, new { developerId = "d28", projectId = "p15", role = "Contributor", since = "2024" },
+};
 
-    foreach (var (projectId, technologyId, purpose) in data)
-    {
-        db.UsesRelations.Add(new UsesEdge { ProjectId = projectId, TechnologyId = technologyId, Purpose = purpose });
-    }
-}
-
-static void SeedDependsOn(AppDbContext db)
+public static readonly object[] Uses =
 {
-    var data = new[]
-    {
-        ("p2", "p7"), ("p2", "p1"),
-        ("p3", "p1"),
-        ("p4", "p1"),
-        ("p5", "p1"),
-        ("p6", "p1"),
-        ("p7", "p1"),
-        ("p8", "p6"),
-        ("p9", "p4"), ("p9", "p8"),
-        ("p10", "p7"), ("p10", "p2"),
-        ("p11", "p6"), ("p11", "p1"),
-        ("p12", "p8"),
-        ("p13", "p1"), ("p13", "p5"),
-        ("p14", "p7"),
-        ("p15", "p13"), ("p15", "p11"),
-    };
+    new { projectId = "p1", technologyId = "t01", purpose = "build" }, new { projectId = "p1", technologyId = "t05", purpose = "frontend" }, new { projectId = "p1", technologyId = "t09", purpose = "data" }, new { projectId = "p1", technologyId = "t13", purpose = "deployment" },
+    new { projectId = "p2", technologyId = "t03", purpose = "processing" }, new { projectId = "p2", technologyId = "t19", purpose = "streaming" }, new { projectId = "p2", technologyId = "t20", purpose = "batch" }, new { projectId = "p2", technologyId = "t05", purpose = "frontend" },
+    new { projectId = "p3", technologyId = "t08", purpose = "runtime" }, new { projectId = "p3", technologyId = "t10", purpose = "storage" }, new { projectId = "p3", technologyId = "t12", purpose = "caching" }, new { projectId = "p3", technologyId = "t17", purpose = "prediction" },
+    new { projectId = "p4", technologyId = "t01", purpose = "build" }, new { projectId = "p4", technologyId = "t06", purpose = "frontend" }, new { projectId = "p4", technologyId = "t09", purpose = "data" }, new { projectId = "p4", technologyId = "t12", purpose = "caching" },
+    new { projectId = "p5", technologyId = "t02", purpose = "build" }, new { projectId = "p5", technologyId = "t04", purpose = "scanner" }, new { projectId = "p5", technologyId = "t16", purpose = "cloud" },
+    new { projectId = "p6", technologyId = "t08", purpose = "runtime" }, new { projectId = "p6", technologyId = "t11", purpose = "dependencies" }, new { projectId = "p6", technologyId = "t12", purpose = "queueing" },
+    new { projectId = "p7", technologyId = "t03", purpose = "processing" }, new { projectId = "p7", technologyId = "t19", purpose = "streaming" }, new { projectId = "p7", technologyId = "t20", purpose = "batch" }, new { projectId = "p7", technologyId = "t15", purpose = "cloud" },
+    new { projectId = "p8", technologyId = "t05", purpose = "build" }, new { projectId = "p8", technologyId = "t08", purpose = "runtime" }, new { projectId = "p8", technologyId = "t11", purpose = "presence" }, new { projectId = "p8", technologyId = "t18", purpose = "api" },
+    new { projectId = "p9", technologyId = "t04", purpose = "api" }, new { projectId = "p9", technologyId = "t03", purpose = "services" }, new { projectId = "p9", technologyId = "t14", purpose = "infrastructure" }, new { projectId = "p9", technologyId = "t15", purpose = "cloud" },
+    new { projectId = "p1", technologyId = "t24", purpose = "api" }, new { projectId = "p3", technologyId = "t21", purpose = "messaging" }, new { projectId = "p4", technologyId = "t15", purpose = "cloud" }, new { projectId = "p5", technologyId = "t25", purpose = "data" },
+    new { projectId = "p6", technologyId = "t21", purpose = "queueing" }, new { projectId = "p8", technologyId = "t24", purpose = "api" },
+    new { projectId = "p10", technologyId = "t20", purpose = "batch" }, new { projectId = "p10", technologyId = "t22", purpose = "streaming" }, new { projectId = "p10", technologyId = "t25", purpose = "storage" }, new { projectId = "p10", technologyId = "t15", purpose = "cloud" },
+    new { projectId = "p11", technologyId = "t13", purpose = "containers" }, new { projectId = "p11", technologyId = "t14", purpose = "orchestration" }, new { projectId = "p11", technologyId = "t01", purpose = "build" }, new { projectId = "p11", technologyId = "t05", purpose = "frontend" },
+    new { projectId = "p12", technologyId = "t08", purpose = "runtime" }, new { projectId = "p12", technologyId = "t06", purpose = "frontend" }, new { projectId = "p12", technologyId = "t10", purpose = "storage" }, new { projectId = "p12", technologyId = "t23", purpose = "prediction" },
+    new { projectId = "p13", technologyId = "t05", purpose = "frontend" }, new { projectId = "p13", technologyId = "t01", purpose = "services" }, new { projectId = "p13", technologyId = "t12", purpose = "sessions" }, new { projectId = "p13", technologyId = "t18", purpose = "api" },
+    new { projectId = "p14", technologyId = "t02", purpose = "gateway" }, new { projectId = "p14", technologyId = "t21", purpose = "messaging" }, new { projectId = "p14", technologyId = "t09", purpose = "storage" }, new { projectId = "p14", technologyId = "t15", purpose = "cloud" },
+    new { projectId = "p15", technologyId = "t26", purpose = "runtime" }, new { projectId = "p15", technologyId = "t24", purpose = "mesh" }, new { projectId = "p15", technologyId = "t13", purpose = "deployment" }, new { projectId = "p15", technologyId = "t16", purpose = "cloud" },
+};
 
-    foreach (var (projectId, dependencyProjectId) in data)
-    {
-        db.DependsOnRelations.Add(new DependsOnEdge { ProjectId = projectId, DependencyProjectId = dependencyProjectId });
-    }
-}
-
-static void SeedHasSkill(AppDbContext db)
+public static readonly object[] DependsOn =
 {
-    var data = new[]
-    {
-        ("d1", "t01", "Expert", "2018"), ("d1", "t09", "Advanced", "2019"), ("d1", "t05", "Proficient", "2020"), ("d1", "t11", "Advanced", "2021"),
-        ("d2", "t05", "Expert", "2019"), ("d2", "t06", "Advanced", "2020"), ("d2", "t07", "Advanced", "2019"), ("d2", "t18", "Proficient", "2021"),
-        ("d3", "t03", "Advanced", "2018"), ("d3", "t05", "Advanced", "2019"), ("d3", "t01", "Proficient", "2020"), ("d3", "t09", "Proficient", "2020"),
-        ("d4", "t13", "Advanced", "2019"), ("d4", "t14", "Expert", "2020"), ("d4", "t15", "Proficient", "2021"),
-        ("d5", "t03", "Expert", "2018"), ("d5", "t20", "Advanced", "2019"), ("d5", "t19", "Proficient", "2021"), ("d5", "t09", "Advanced", "2018"),
-        ("d6", "t03", "Advanced", "2018"), ("d6", "t17", "Expert", "2019"), ("d6", "t20", "Proficient", "2020"),
-        ("d7", "t05", "Proficient", "2020"), ("d7", "t06", "Advanced", "2021"),
-        ("d8", "t01", "Advanced", "2018"), ("d8", "t08", "Proficient", "2020"), ("d8", "t09", "Advanced", "2019"), ("d8", "t11", "Proficient", "2021"),
-        ("d9", "t05", "Expert", "2018"), ("d9", "t07", "Expert", "2019"), ("d9", "t06", "Advanced", "2020"), ("d9", "t18", "Advanced", "2021"),
-        ("d10", "t03", "Proficient", "2020"), ("d10", "t05", "Expert", "2018"), ("d10", "t11", "Proficient", "2021"), ("d10", "t18", "Advanced", "2019"),
-        ("d11", "t14", "Advanced", "2020"), ("d11", "t13", "Advanced", "2021"), ("d11", "t15", "Expert", "2019"), ("d11", "t04", "Proficient", "2022"),
-        ("d12", "t03", "Expert", "2017"), ("d12", "t20", "Advanced", "2019"), ("d12", "t09", "Proficient", "2020"), ("d12", "t19", "Advanced", "2020"),
-        ("d13", "t06", "Proficient", "2021"), ("d13", "t08", "Proficient", "2019"), ("d13", "t05", "Advanced", "2020"), ("d13", "t10", "Advanced", "2019"),
-        ("d14", "t01", "Proficient", "2017"), ("d14", "t05", "Advanced", "2019"), ("d14", "t11", "Proficient", "2021"),
-        ("d15", "t02", "Advanced", "2018"), ("d15", "t04", "Advanced", "2019"), ("d15", "t16", "Proficient", "2020"),
-        ("d16", "t05", "Proficient", "2020"), ("d16", "t06", "Proficient", "2021"), ("d16", "t18", "Advanced", "2021"),
-        ("d17", "t01", "Advanced", "2019"), ("d17", "t09", "Advanced", "2020"), ("d17", "t24", "Proficient", "2022"), ("d17", "t26", "Proficient", "2023"),
-        ("d18", "t03", "Expert", "2018"), ("d18", "t22", "Advanced", "2021"), ("d18", "t20", "Advanced", "2019"),
-        ("d19", "t08", "Advanced", "2020"), ("d19", "t06", "Proficient", "2021"), ("d19", "t05", "Advanced", "2020"), ("d19", "t23", "Proficient", "2022"),
-        ("d20", "t05", "Expert", "2020"), ("d20", "t06", "Advanced", "2021"), ("d20", "t07", "Advanced", "2021"),
-        ("d21", "t03", "Advanced", "2019"), ("d21", "t23", "Expert", "2021"), ("d21", "t17", "Advanced", "2020"), ("d21", "t22", "Proficient", "2022"),
-        ("d22", "t14", "Advanced", "2021"), ("d22", "t13", "Expert", "2020"), ("d22", "t16", "Proficient", "2022"),
-        ("d23", "t05", "Proficient", "2021"), ("d23", "t06", "Proficient", "2021"), ("d23", "t18", "Advanced", "2022"),
-        ("d24", "t03", "Advanced", "2018"), ("d24", "t05", "Advanced", "2019"), ("d24", "t02", "Proficient", "2020"), ("d24", "t09", "Proficient", "2019"),
-        ("d25", "t26", "Advanced", "2020"), ("d25", "t04", "Advanced", "2019"), ("d25", "t16", "Proficient", "2021"), ("d25", "t11", "Proficient", "2022"),
-        ("d26", "t01", "Expert", "2018"), ("d26", "t18", "Advanced", "2020"), ("d26", "t24", "Advanced", "2021"), ("d26", "t09", "Proficient", "2019"),
-        ("d27", "t03", "Advanced", "2019"), ("d27", "t20", "Advanced", "2020"), ("d27", "t25", "Proficient", "2021"), ("d27", "t22", "Proficient", "2022"),
-        ("d28", "t05", "Expert", "2021"), ("d28", "t06", "Advanced", "2022"), ("d28", "t07", "Proficient", "2022"),
-    };
+    new { projectId = "p2", dependencyProjectId = "p7" }, new { projectId = "p2", dependencyProjectId = "p1" },
+    new { projectId = "p3", dependencyProjectId = "p1" },
+    new { projectId = "p4", dependencyProjectId = "p1" },
+    new { projectId = "p5", dependencyProjectId = "p1" },
+    new { projectId = "p6", dependencyProjectId = "p1" },
+    new { projectId = "p7", dependencyProjectId = "p1" },
+    new { projectId = "p8", dependencyProjectId = "p6" },
+    new { projectId = "p9", dependencyProjectId = "p4" }, new { projectId = "p9", dependencyProjectId = "p8" },
+    new { projectId = "p10", dependencyProjectId = "p7" }, new { projectId = "p10", dependencyProjectId = "p2" },
+    new { projectId = "p11", dependencyProjectId = "p6" }, new { projectId = "p11", dependencyProjectId = "p1" },
+    new { projectId = "p12", dependencyProjectId = "p8" },
+    new { projectId = "p13", dependencyProjectId = "p1" }, new { projectId = "p13", dependencyProjectId = "p5" },
+    new { projectId = "p14", dependencyProjectId = "p7" },
+    new { projectId = "p15", dependencyProjectId = "p13" }, new { projectId = "p15", dependencyProjectId = "p11" },
+};
 
-    foreach (var (developerId, technologyId, proficiency, since) in data)
-    {
-        db.HasSkillRelations.Add(new HasSkillEdge { DeveloperId = developerId, TechnologyId = technologyId, Proficiency = proficiency, Since = since });
-    }
-}
-
-static void SeedContributedTo(AppDbContext db)
+public static readonly object[] HasSkill =
 {
-    var data = new[]
-    {
-        ("d1", "r01", 120, "2021"), ("d1", "r03", 35, "2021"),
-        ("d2", "r02", 80, "2022"),
-        ("d3", "r08", 60, "2023"), ("d3", "r09", 50, "2023"),
-        ("d4", "r03", 45, "2021"),
-        ("d5", "r04", 90, "2022"),
-        ("d6", "r06", 70, "2022"),
-        ("d7", "r02", 20, "2021"), ("d7", "r08", 15, "2023"),
-        ("d8", "r11", 60, "2023"),
-        ("d9", "r05", 55, "2022"), ("d9", "r13", 40, "2024"),
-        ("d10", "r09", 45, "2023"), ("d10", "r14", 30, "2024"),
-        ("d11", "r10", 65, "2022"),
-        ("d12", "r12", 85, "2020"),
-        ("d13", "r07", 50, "2022"), ("d13", "r14", 40, "2024"),
-        ("d14", "r01", 25, "2021"),
-        ("d15", "r10", 40, "2022"),
-        ("d16", "r10", 18, "2022"),
-        ("d17", "r01", 60, "2022"), ("d17", "r16", 45, "2023"),
-        ("d18", "r15", 90, "2023"), ("d18", "r12", 30, "2020"),
-        ("d19", "r17", 55, "2024"), ("d19", "r14", 35, "2024"),
-        ("d20", "r17", 40, "2024"), ("d20", "r13", 25, "2024"),
-        ("d21", "r15", 50, "2023"), ("d21", "r04", 25, "2023"),
-        ("d22", "r18", 45, "2023"), ("d22", "r16", 30, "2023"),
-        ("d23", "r18", 20, "2023"), ("d23", "r20", 15, "2024"),
-        ("d24", "r19", 65, "2022"), ("d24", "r01", 25, "2022"),
-        ("d25", "r18", 35, "2023"), ("d25", "r10", 25, "2023"),
-        ("d26", "r20", 70, "2024"), ("d26", "r18", 30, "2023"),
-        ("d27", "r15", 55, "2023"), ("d27", "r19", 25, "2024"),
-        ("d28", "r16", 45, "2023"), ("d28", "r21", 20, "2024"),
-    };
+    new { developerId = "d1", technologyId = "t01", proficiency = "Expert", since = "2018" }, new { developerId = "d1", technologyId = "t09", proficiency = "Advanced", since = "2019" }, new { developerId = "d1", technologyId = "t05", proficiency = "Proficient", since = "2020" }, new { developerId = "d1", technologyId = "t11", proficiency = "Advanced", since = "2021" },
+    new { developerId = "d2", technologyId = "t05", proficiency = "Expert", since = "2019" }, new { developerId = "d2", technologyId = "t06", proficiency = "Advanced", since = "2020" }, new { developerId = "d2", technologyId = "t07", proficiency = "Advanced", since = "2019" }, new { developerId = "d2", technologyId = "t18", proficiency = "Proficient", since = "2021" },
+    new { developerId = "d3", technologyId = "t03", proficiency = "Advanced", since = "2018" }, new { developerId = "d3", technologyId = "t05", proficiency = "Advanced", since = "2019" }, new { developerId = "d3", technologyId = "t01", proficiency = "Proficient", since = "2020" }, new { developerId = "d3", technologyId = "t09", proficiency = "Proficient", since = "2020" },
+    new { developerId = "d4", technologyId = "t13", proficiency = "Advanced", since = "2019" }, new { developerId = "d4", technologyId = "t14", proficiency = "Expert", since = "2020" }, new { developerId = "d4", technologyId = "t15", proficiency = "Proficient", since = "2021" },
+    new { developerId = "d5", technologyId = "t03", proficiency = "Expert", since = "2018" }, new { developerId = "d5", technologyId = "t20", proficiency = "Advanced", since = "2019" }, new { developerId = "d5", technologyId = "t19", proficiency = "Proficient", since = "2021" }, new { developerId = "d5", technologyId = "t09", proficiency = "Advanced", since = "2018" },
+    new { developerId = "d6", technologyId = "t03", proficiency = "Advanced", since = "2018" }, new { developerId = "d6", technologyId = "t17", proficiency = "Expert", since = "2019" }, new { developerId = "d6", technologyId = "t20", proficiency = "Proficient", since = "2020" },
+    new { developerId = "d7", technologyId = "t05", proficiency = "Proficient", since = "2020" }, new { developerId = "d7", technologyId = "t06", proficiency = "Advanced", since = "2021" },
+    new { developerId = "d8", technologyId = "t01", proficiency = "Advanced", since = "2018" }, new { developerId = "d8", technologyId = "t08", proficiency = "Proficient", since = "2020" }, new { developerId = "d8", technologyId = "t09", proficiency = "Advanced", since = "2019" }, new { developerId = "d8", technologyId = "t11", proficiency = "Proficient", since = "2021" },
+    new { developerId = "d9", technologyId = "t05", proficiency = "Expert", since = "2018" }, new { developerId = "d9", technologyId = "t07", proficiency = "Expert", since = "2019" }, new { developerId = "d9", technologyId = "t06", proficiency = "Advanced", since = "2020" }, new { developerId = "d9", technologyId = "t18", proficiency = "Advanced", since = "2021" },
+    new { developerId = "d10", technologyId = "t03", proficiency = "Proficient", since = "2020" }, new { developerId = "d10", technologyId = "t05", proficiency = "Expert", since = "2018" }, new { developerId = "d10", technologyId = "t11", proficiency = "Proficient", since = "2021" }, new { developerId = "d10", technologyId = "t18", proficiency = "Advanced", since = "2019" },
+    new { developerId = "d11", technologyId = "t14", proficiency = "Advanced", since = "2020" }, new { developerId = "d11", technologyId = "t13", proficiency = "Advanced", since = "2021" }, new { developerId = "d11", technologyId = "t15", proficiency = "Expert", since = "2019" }, new { developerId = "d11", technologyId = "t04", proficiency = "Proficient", since = "2022" },
+    new { developerId = "d12", technologyId = "t03", proficiency = "Expert", since = "2017" }, new { developerId = "d12", technologyId = "t20", proficiency = "Advanced", since = "2019" }, new { developerId = "d12", technologyId = "t09", proficiency = "Proficient", since = "2020" }, new { developerId = "d12", technologyId = "t19", proficiency = "Advanced", since = "2020" },
+    new { developerId = "d13", technologyId = "t06", proficiency = "Proficient", since = "2021" }, new { developerId = "d13", technologyId = "t08", proficiency = "Proficient", since = "2019" }, new { developerId = "d13", technologyId = "t05", proficiency = "Advanced", since = "2020" }, new { developerId = "d13", technologyId = "t10", proficiency = "Advanced", since = "2019" },
+    new { developerId = "d14", technologyId = "t01", proficiency = "Proficient", since = "2017" }, new { developerId = "d14", technologyId = "t05", proficiency = "Advanced", since = "2019" }, new { developerId = "d14", technologyId = "t11", proficiency = "Proficient", since = "2021" },
+    new { developerId = "d15", technologyId = "t02", proficiency = "Advanced", since = "2018" }, new { developerId = "d15", technologyId = "t04", proficiency = "Advanced", since = "2019" }, new { developerId = "d15", technologyId = "t16", proficiency = "Proficient", since = "2020" },
+    new { developerId = "d16", technologyId = "t05", proficiency = "Proficient", since = "2020" }, new { developerId = "d16", technologyId = "t06", proficiency = "Proficient", since = "2021" }, new { developerId = "d16", technologyId = "t18", proficiency = "Advanced", since = "2021" },
+    new { developerId = "d17", technologyId = "t01", proficiency = "Advanced", since = "2019" }, new { developerId = "d17", technologyId = "t09", proficiency = "Advanced", since = "2020" }, new { developerId = "d17", technologyId = "t24", proficiency = "Proficient", since = "2022" }, new { developerId = "d17", technologyId = "t26", proficiency = "Proficient", since = "2023" },
+    new { developerId = "d18", technologyId = "t03", proficiency = "Expert", since = "2018" }, new { developerId = "d18", technologyId = "t22", proficiency = "Advanced", since = "2021" }, new { developerId = "d18", technologyId = "t20", proficiency = "Advanced", since = "2019" },
+    new { developerId = "d19", technologyId = "t08", proficiency = "Advanced", since = "2020" }, new { developerId = "d19", technologyId = "t06", proficiency = "Proficient", since = "2021" }, new { developerId = "d19", technologyId = "t05", proficiency = "Advanced", since = "2020" }, new { developerId = "d19", technologyId = "t23", proficiency = "Proficient", since = "2022" },
+    new { developerId = "d20", technologyId = "t05", proficiency = "Expert", since = "2020" }, new { developerId = "d20", technologyId = "t06", proficiency = "Advanced", since = "2021" }, new { developerId = "d20", technologyId = "t07", proficiency = "Advanced", since = "2021" },
+    new { developerId = "d21", technologyId = "t03", proficiency = "Advanced", since = "2019" }, new { developerId = "d21", technologyId = "t23", proficiency = "Expert", since = "2021" }, new { developerId = "d21", technologyId = "t17", proficiency = "Advanced", since = "2020" }, new { developerId = "d21", technologyId = "t22", proficiency = "Proficient", since = "2022" },
+    new { developerId = "d22", technologyId = "t14", proficiency = "Advanced", since = "2021" }, new { developerId = "d22", technologyId = "t13", proficiency = "Expert", since = "2020" }, new { developerId = "d22", technologyId = "t16", proficiency = "Proficient", since = "2022" },
+    new { developerId = "d23", technologyId = "t05", proficiency = "Proficient", since = "2021" }, new { developerId = "d23", technologyId = "t06", proficiency = "Proficient", since = "2021" }, new { developerId = "d23", technologyId = "t18", proficiency = "Advanced", since = "2022" },
+    new { developerId = "d24", technologyId = "t03", proficiency = "Advanced", since = "2018" }, new { developerId = "d24", technologyId = "t05", proficiency = "Advanced", since = "2019" }, new { developerId = "d24", technologyId = "t02", proficiency = "Proficient", since = "2020" }, new { developerId = "d24", technologyId = "t09", proficiency = "Proficient", since = "2019" },
+    new { developerId = "d25", technologyId = "t26", proficiency = "Advanced", since = "2020" }, new { developerId = "d25", technologyId = "t04", proficiency = "Advanced", since = "2019" }, new { developerId = "d25", technologyId = "t16", proficiency = "Proficient", since = "2021" }, new { developerId = "d25", technologyId = "t11", proficiency = "Proficient", since = "2022" },
+    new { developerId = "d26", technologyId = "t01", proficiency = "Expert", since = "2018" }, new { developerId = "d26", technologyId = "t18", proficiency = "Advanced", since = "2020" }, new { developerId = "d26", technologyId = "t24", proficiency = "Advanced", since = "2021" }, new { developerId = "d26", technologyId = "t09", proficiency = "Proficient", since = "2019" },
+    new { developerId = "d27", technologyId = "t03", proficiency = "Advanced", since = "2019" }, new { developerId = "d27", technologyId = "t20", proficiency = "Advanced", since = "2020" }, new { developerId = "d27", technologyId = "t25", proficiency = "Proficient", since = "2021" }, new { developerId = "d27", technologyId = "t22", proficiency = "Proficient", since = "2022" },
+    new { developerId = "d28", technologyId = "t05", proficiency = "Expert", since = "2021" }, new { developerId = "d28", technologyId = "t06", proficiency = "Advanced", since = "2022" }, new { developerId = "d28", technologyId = "t07", proficiency = "Proficient", since = "2022" },
+};
 
-    foreach (var (developerId, repositoryId, count, since) in data)
-    {
-        db.ContributedToRelations.Add(new ContributedToEdge { DeveloperId = developerId, RepositoryId = repositoryId, ContributionCount = count, Since = since });
-    }
-}
-
-static void SeedRequiresSkill(AppDbContext db)
+public static readonly object[] ContributedTo =
 {
-    var data = new[]
-    {
-        ("sk1", "t01"), ("sk1", "t09"),
-        ("sk2", "t01"), ("sk2", "t05"),
-        ("sk3", "t09"),
-        ("sk4", "t01"), ("sk4", "t05"),
-        ("sk5", "t03"), ("sk5", "t05"),
-        ("sk6", "t05"), ("sk6", "t06"),
-        ("sk7", "t19"), ("sk7", "t20"),
-        ("sk8", "t03"), ("sk8", "t09"),
-        ("sk9", "t08"), ("sk9", "t10"),
-        ("sk10", "t08"), ("sk10", "t12"),
-        ("sk11", "t05"), ("sk11", "t06"),
-        ("sk12", "t01"), ("sk12", "t06"),
-        ("sk13", "t01"), ("sk13", "t09"),
-        ("sk14", "t05"), ("sk14", "t06"),
-        ("sk15", "t02"), ("sk15", "t04"),
-        ("sk16", "t04"), ("sk16", "t16"),
-        ("sk17", "t05"),
-        ("sk18", "t08"), ("sk18", "t11"),
-        ("sk19", "t12"),
-        ("sk20", "t11"), ("sk20", "t12"),
-        ("sk21", "t08"),
-        ("sk22", "t03"), ("sk22", "t19"),
-        ("sk23", "t03"), ("sk23", "t20"),
-        ("sk24", "t19"), ("sk24", "t15"),
-        ("sk25", "t08"), ("sk25", "t18"),
-        ("sk26", "t11"), ("sk26", "t05"),
-        ("sk27", "t08"), ("sk27", "t18"),
-        ("sk28", "t12"), ("sk28", "t04"),
-        ("sk29", "t04"), ("sk29", "t03"),
-        ("sk30", "t05"), ("sk30", "t11"),
-        ("sk31", "t03"), ("sk31", "t17"),
-        ("sk32", "t20"), ("sk32", "t22"),
-        ("sk33", "t20"), ("sk33", "t25"),
-        ("sk34", "t03"), ("sk34", "t25"),
-        ("sk35", "t01"), ("sk35", "t13"),
-        ("sk36", "t13"), ("sk36", "t14"),
-        ("sk37", "t05"), ("sk37", "t16"),
-        ("sk38", "t08"), ("sk38", "t23"),
-        ("sk39", "t06"), ("sk39", "t05"),
-        ("sk40", "t01"), ("sk40", "t18"),
-        ("sk41", "t01"), ("sk41", "t12"),
-        ("sk42", "t05"), ("sk42", "t18"),
-        ("sk43", "t02"), ("sk43", "t21"),
-        ("sk44", "t02"), ("sk44", "t18"),
-        ("sk45", "t26"), ("sk45", "t13"),
-        ("sk46", "t26"), ("sk46", "t24"),
-    };
+    new { developerId = "d1", repositoryId = "r01", contributionCount = 120, since = "2021" }, new { developerId = "d1", repositoryId = "r03", contributionCount = 35, since = "2021" },
+    new { developerId = "d2", repositoryId = "r02", contributionCount = 80, since = "2022" },
+    new { developerId = "d3", repositoryId = "r08", contributionCount = 60, since = "2023" }, new { developerId = "d3", repositoryId = "r09", contributionCount = 50, since = "2023" },
+    new { developerId = "d4", repositoryId = "r03", contributionCount = 45, since = "2021" },
+    new { developerId = "d5", repositoryId = "r04", contributionCount = 90, since = "2022" },
+    new { developerId = "d6", repositoryId = "r06", contributionCount = 70, since = "2022" },
+    new { developerId = "d7", repositoryId = "r02", contributionCount = 20, since = "2021" }, new { developerId = "d7", repositoryId = "r08", contributionCount = 15, since = "2023" },
+    new { developerId = "d8", repositoryId = "r11", contributionCount = 60, since = "2023" },
+    new { developerId = "d9", repositoryId = "r05", contributionCount = 55, since = "2022" }, new { developerId = "d9", repositoryId = "r13", contributionCount = 40, since = "2024" },
+    new { developerId = "d10", repositoryId = "r09", contributionCount = 45, since = "2023" }, new { developerId = "d10", repositoryId = "r14", contributionCount = 30, since = "2024" },
+    new { developerId = "d11", repositoryId = "r10", contributionCount = 65, since = "2022" },
+    new { developerId = "d12", repositoryId = "r12", contributionCount = 85, since = "2020" },
+    new { developerId = "d13", repositoryId = "r07", contributionCount = 50, since = "2022" }, new { developerId = "d13", repositoryId = "r14", contributionCount = 40, since = "2024" },
+    new { developerId = "d14", repositoryId = "r01", contributionCount = 25, since = "2021" },
+    new { developerId = "d15", repositoryId = "r10", contributionCount = 40, since = "2022" },
+    new { developerId = "d16", repositoryId = "r10", contributionCount = 18, since = "2022" },
+    new { developerId = "d17", repositoryId = "r01", contributionCount = 60, since = "2022" }, new { developerId = "d17", repositoryId = "r16", contributionCount = 45, since = "2023" },
+    new { developerId = "d18", repositoryId = "r15", contributionCount = 90, since = "2023" }, new { developerId = "d18", repositoryId = "r12", contributionCount = 30, since = "2020" },
+    new { developerId = "d19", repositoryId = "r17", contributionCount = 55, since = "2024" }, new { developerId = "d19", repositoryId = "r14", contributionCount = 35, since = "2024" },
+    new { developerId = "d20", repositoryId = "r17", contributionCount = 40, since = "2024" }, new { developerId = "d20", repositoryId = "r13", contributionCount = 25, since = "2024" },
+    new { developerId = "d21", repositoryId = "r15", contributionCount = 50, since = "2023" }, new { developerId = "d21", repositoryId = "r04", contributionCount = 25, since = "2023" },
+    new { developerId = "d22", repositoryId = "r18", contributionCount = 45, since = "2023" }, new { developerId = "d22", repositoryId = "r16", contributionCount = 30, since = "2023" },
+    new { developerId = "d23", repositoryId = "r18", contributionCount = 20, since = "2023" }, new { developerId = "d23", repositoryId = "r20", contributionCount = 15, since = "2024" },
+    new { developerId = "d24", repositoryId = "r19", contributionCount = 65, since = "2022" }, new { developerId = "d24", repositoryId = "r01", contributionCount = 25, since = "2022" },
+    new { developerId = "d25", repositoryId = "r18", contributionCount = 35, since = "2023" }, new { developerId = "d25", repositoryId = "r10", contributionCount = 25, since = "2023" },
+    new { developerId = "d26", repositoryId = "r20", contributionCount = 70, since = "2024" }, new { developerId = "d26", repositoryId = "r18", contributionCount = 30, since = "2023" },
+    new { developerId = "d27", repositoryId = "r15", contributionCount = 55, since = "2023" }, new { developerId = "d27", repositoryId = "r19", contributionCount = 25, since = "2024" },
+    new { developerId = "d28", repositoryId = "r16", contributionCount = 45, since = "2023" }, new { developerId = "d28", repositoryId = "r21", contributionCount = 20, since = "2024" },
+};
 
-    foreach (var (taskId, technologyId) in data)
-    {
-        db.RequiresSkillRelations.Add(new RequiresSkillEdge { TaskId = taskId, TechnologyId = technologyId });
-    }
+public static readonly object[] RequiresSkill =
+{
+    new { taskId = "sk1", technologyId = "t01" }, new { taskId = "sk1", technologyId = "t09" },
+    new { taskId = "sk2", technologyId = "t01" }, new { taskId = "sk2", technologyId = "t05" },
+    new { taskId = "sk3", technologyId = "t09" },
+    new { taskId = "sk4", technologyId = "t01" }, new { taskId = "sk4", technologyId = "t05" },
+    new { taskId = "sk5", technologyId = "t03" }, new { taskId = "sk5", technologyId = "t05" },
+    new { taskId = "sk6", technologyId = "t05" }, new { taskId = "sk6", technologyId = "t06" },
+    new { taskId = "sk7", technologyId = "t19" }, new { taskId = "sk7", technologyId = "t20" },
+    new { taskId = "sk8", technologyId = "t03" }, new { taskId = "sk8", technologyId = "t09" },
+    new { taskId = "sk9", technologyId = "t08" }, new { taskId = "sk9", technologyId = "t10" },
+    new { taskId = "sk10", technologyId = "t08" }, new { taskId = "sk10", technologyId = "t12" },
+    new { taskId = "sk11", technologyId = "t05" }, new { taskId = "sk11", technologyId = "t06" },
+    new { taskId = "sk12", technologyId = "t01" }, new { taskId = "sk12", technologyId = "t06" },
+    new { taskId = "sk13", technologyId = "t01" }, new { taskId = "sk13", technologyId = "t09" },
+    new { taskId = "sk14", technologyId = "t05" }, new { taskId = "sk14", technologyId = "t06" },
+    new { taskId = "sk15", technologyId = "t02" }, new { taskId = "sk15", technologyId = "t04" },
+    new { taskId = "sk16", technologyId = "t04" }, new { taskId = "sk16", technologyId = "t16" },
+    new { taskId = "sk17", technologyId = "t05" },
+    new { taskId = "sk18", technologyId = "t08" }, new { taskId = "sk18", technologyId = "t11" },
+    new { taskId = "sk19", technologyId = "t12" },
+    new { taskId = "sk20", technologyId = "t11" }, new { taskId = "sk20", technologyId = "t12" },
+    new { taskId = "sk21", technologyId = "t08" },
+    new { taskId = "sk22", technologyId = "t03" }, new { taskId = "sk22", technologyId = "t19" },
+    new { taskId = "sk23", technologyId = "t03" }, new { taskId = "sk23", technologyId = "t20" },
+    new { taskId = "sk24", technologyId = "t19" }, new { taskId = "sk24", technologyId = "t15" },
+    new { taskId = "sk25", technologyId = "t08" }, new { taskId = "sk25", technologyId = "t18" },
+    new { taskId = "sk26", technologyId = "t11" }, new { taskId = "sk26", technologyId = "t05" },
+    new { taskId = "sk27", technologyId = "t08" }, new { taskId = "sk27", technologyId = "t18" },
+    new { taskId = "sk28", technologyId = "t12" }, new { taskId = "sk28", technologyId = "t04" },
+    new { taskId = "sk29", technologyId = "t04" }, new { taskId = "sk29", technologyId = "t03" },
+    new { taskId = "sk30", technologyId = "t05" }, new { taskId = "sk30", technologyId = "t11" },
+    new { taskId = "sk31", technologyId = "t03" }, new { taskId = "sk31", technologyId = "t17" },
+    new { taskId = "sk32", technologyId = "t20" }, new { taskId = "sk32", technologyId = "t22" },
+    new { taskId = "sk33", technologyId = "t20" }, new { taskId = "sk33", technologyId = "t25" },
+    new { taskId = "sk34", technologyId = "t03" }, new { taskId = "sk34", technologyId = "t25" },
+    new { taskId = "sk35", technologyId = "t01" }, new { taskId = "sk35", technologyId = "t13" },
+    new { taskId = "sk36", technologyId = "t13" }, new { taskId = "sk36", technologyId = "t14" },
+    new { taskId = "sk37", technologyId = "t05" }, new { taskId = "sk37", technologyId = "t16" },
+    new { taskId = "sk38", technologyId = "t08" }, new { taskId = "sk38", technologyId = "t23" },
+    new { taskId = "sk39", technologyId = "t06" }, new { taskId = "sk39", technologyId = "t05" },
+    new { taskId = "sk40", technologyId = "t01" }, new { taskId = "sk40", technologyId = "t18" },
+    new { taskId = "sk41", technologyId = "t01" }, new { taskId = "sk41", technologyId = "t12" },
+    new { taskId = "sk42", technologyId = "t05" }, new { taskId = "sk42", technologyId = "t18" },
+    new { taskId = "sk43", technologyId = "t02" }, new { taskId = "sk43", technologyId = "t21" },
+    new { taskId = "sk44", technologyId = "t02" }, new { taskId = "sk44", technologyId = "t18" },
+    new { taskId = "sk45", technologyId = "t26" }, new { taskId = "sk45", technologyId = "t13" },
+    new { taskId = "sk46", technologyId = "t26" }, new { taskId = "sk46", technologyId = "t24" },
+};
 }

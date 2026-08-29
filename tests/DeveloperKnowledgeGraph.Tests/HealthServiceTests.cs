@@ -18,7 +18,7 @@ public sealed class HealthServiceTests
         var result = await service.GetHealthAsync(CancellationToken.None);
 
         result.Status.Should().Be("healthy");
-        result.Database.Should().Be("SQL Server");
+        result.Database.Should().Be("CognoDB");
         result.Message.Should().BeNull();
     }
 

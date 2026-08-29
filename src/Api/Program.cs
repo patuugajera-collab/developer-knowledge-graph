@@ -1,10 +1,9 @@
 using DeveloperKnowledgeGraph.Api.Configuration;
-using DeveloperKnowledgeGraph.Api.Data;
 using DeveloperKnowledgeGraph.Api.Middleware;
 using DeveloperKnowledgeGraph.Api.Repositories;
 using DeveloperKnowledgeGraph.Api.Services;
-using Microsoft.EntityFrameworkCore;
 using Microsoft.OpenApi;
+using Neo4j.Driver;
 
 var environmentFile = Path.Combine(Directory.GetCurrentDirectory(), ".env");
 EnvFileLoader.Load(environmentFile);
@@ -12,11 +11,17 @@ EnvFileLoader.LogLoadedVariables(environmentFile);
 
 var builder = WebApplication.CreateBuilder(args);
 
-builder.Services.AddDbContext<AppDbContext>(options =>
-    options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection")));
+var cognoUri = builder.Configuration.GetConnectionString("CognoDB")
+    ?? throw new InvalidOperationException("Connection string 'CognoDB' is not configured.");
+var cognoPassword = Environment.GetEnvironmentVariable("COGNODB_PASSWORD")
+    ?? builder.Configuration["CognoDB:Password"]
+    ?? throw new InvalidOperationException("CognoDB password is not configured (set COGNODB_PASSWORD).");
+
+builder.Services.AddSingleton<IDriver>(_ =>
+    GraphDatabase.Driver(cognoUri, AuthTokens.Basic("cognodb", cognoPassword)));
 
 builder.Services.AddControllers();
-builder.Services.AddScoped<IDatabaseConnection, EFDatabaseConnection>();
+builder.Services.AddScoped<IDatabaseConnection, CognoDbConnection>();
 builder.Services.AddScoped<IGraphRepository, GraphRepository>();
 
 builder.Services.AddScoped<IDeveloperService, DeveloperService>();
@@ -38,7 +43,7 @@ builder.Services.AddSwaggerGen(options =>
         Title = "Developer Knowledge Graph API",
         Version = "v1",
         Description =
-            "REST API for exploring a developer knowledge and dependency graph stored in SQL Server.",
+            "REST API for exploring a developer knowledge and dependency graph stored in CognoDB.",
     });
 });
 

@@ -10,7 +10,7 @@ public interface IHealthService
 
 public sealed class HealthService : IHealthService
 {
-    private const string DatabaseName = "SQL Server";
+    private const string DatabaseName = "CognoDB";
 
     private readonly IDatabaseConnection _connection;
 

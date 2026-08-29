@@ -6,9 +6,9 @@ A full-stack application for exploring a developer knowledge and dependency grap
 
 | Layer     | Technology                                                                  |
 |-----------|-----------------------------------------------------------------------------|
-| Backend   | ASP.NET Core (.NET 10), EF Core (SQL Server), Swagger/OpenAPI                |
+| Backend   | ASP.NET Core (.NET 10), Neo4j.Driver, Swagger/OpenAPI                        |
 | Frontend  | Angular 19, Angular Material, D3-force (graph rendering)                     |
-| Database  | SQL Server (LocalDB by default)                                              |
+| Database  | CognoDB (managed Neo4j-compatible; Cypher over Bolt)                         |
 
 ## Repository layout
 
@@ -21,26 +21,27 @@ A full-stack application for exploring a developer knowledge and dependency grap
 └── tests/                    xUnit integration & unit tests
 ```
 
-Behaviorally, path-based queries (dependency chains, neighbourhood graphs, shortest paths) run as in-memory breadth-first traversals over the edge tables, preserving the semantics of the original Cypher queries on this small graph.
+Behaviorally, path-based queries (dependency chains, neighbourhood graphs, shortest paths) typically run natively in Cypher; the graph explorer reads the edge set and runs breadth-first traversals in memory for its neighbourhood and shortest-path views.
 
 ## Prerequisites
 
 - [.NET 10 SDK](https://dotnet.microsoft.com/download)
 - [Node.js](https://nodejs.org/) 18+ and npm
 - [Angular CLI](https://angular.dev/cli) 19 (`npm install -g @angular/cli`)
-- SQL Server (LocalDB is used by default on Windows)
+- A CognoDB instance (Neo4j-compatible) with its Bolt URI and password
 
 ## Getting started
 
 ### 1. Database
 
-Seed the database (creates the schema and inserts sample data):
+Seed the database (creates the constraints/schema and inserts sample data):
 
 ```powershell
-dotnet run --project src/SeedTool
+# pass the Bolt URI and the CognoDB password, e.g.:
+dotnet run --project src/SeedTool -- "bolt+s://db-5e76cc8b.bravo.databases.cognodb.com" "YOUR_PASSWORD"
 ```
 
-This uses the connection string `Server=(localdb)\MSSQLLocalDB;Database=DeveloperKnowledgeGraph;Trusted_Connection=True;TrustServerCertificate=True;` by default. To use a different connection string, pass it as an argument or set the `DEFAULT_CONNECTION` environment variable.
+The URI defaults to `bolt+s://db-5e76cc8b.bravo.databases.cognodb.com` (overridable via the first argument or the `DEFAULT_CONNECTION` environment variable) and the password is read from the second argument or the `COGNODB_PASSWORD` environment variable.
 
 ### 2. API configuration
 
@@ -52,7 +53,7 @@ Copy-Item .env.example .env
 
 `.env` is gitignored and must never be committed. Set `CORS_ALLOWED_ORIGINS` to your Angular dev server and any deployed frontend (default: `http://localhost:4200`).
 
-You can also override the connection string via `appsettings.json` (`ConnectionStrings:DefaultConnection`).
+You can also override the connection details via `appsettings.json` (`ConnectionStrings:CognoDB` for the Bolt URI, `CognoDB:Password` for the credentials).
 
 ### 3. Run the API
 

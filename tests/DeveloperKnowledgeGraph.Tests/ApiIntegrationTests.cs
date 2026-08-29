@@ -22,7 +22,7 @@ public sealed class ApiIntegrationTests
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
         body!.Status.Should().Be("healthy");
-        body.Database.Should().Be("SQL Server");
+        body.Database.Should().Be("CognoDB");
     }
 
     [Fact]

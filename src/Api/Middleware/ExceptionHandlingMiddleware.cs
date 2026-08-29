@@ -1,7 +1,7 @@
 using System.Net;
 using DeveloperKnowledgeGraph.Api.DTOs;
 using DeveloperKnowledgeGraph.Api.Exceptions;
-using Microsoft.Data.SqlClient;
+using Neo4j.Driver;
 
 namespace DeveloperKnowledgeGraph.Api.Middleware;
 
@@ -77,10 +77,10 @@ public sealed class ExceptionHandlingMiddleware
                 SafeDetail(ex.InnerException),
                 LogLevel.Warning),
 
-            SqlException ex => (
+            ServiceUnavailableException or SessionExpiredException or SecurityException => (
                 (int)HttpStatusCode.ServiceUnavailable,
                 "Unable to connect to the database. Please try again.",
-                SafeDetail(ex.InnerException),
+                SafeDetail(exception.InnerException),
                 LogLevel.Warning),
 
             _ => (
